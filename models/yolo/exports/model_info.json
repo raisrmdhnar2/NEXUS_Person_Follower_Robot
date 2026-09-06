@@ -1,0 +1,24 @@
+{
+    "project": "NEXUS Person Follower Robot",
+    "task": "person_detection",
+    "model": "yolov8n.pt",
+    "framework": "Ultralytics YOLO / PyTorch",
+    "input_size": [
+        640,
+        640
+    ],
+    "classes": [
+        "person"
+    ],
+    "person_class_id": 0,
+    "confidence_threshold": 0.5,
+    "iou_threshold": 0.45,
+    "precision": "FP32",
+    "formats": [
+        "pt",
+        "onnx"
+    ],
+    "training_status": "pretrained_baseline",
+    "deployment_target": "Raspberry Pi 5",
+    "benchmark_status": "NOT YET BENCHMARKED"
+}

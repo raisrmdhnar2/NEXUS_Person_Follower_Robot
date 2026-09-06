@@ -1,0 +1,9 @@
+# NEXUS Person Follower Robot — Custom Person Dataset Configuration
+path: /home/nexus_is/NEXUS_Person_Follower_Robot/models/yolo/datasets/person
+train: images/train
+val: images/val
+test: images/test
+
+# Classes
+names:
+  0: person
