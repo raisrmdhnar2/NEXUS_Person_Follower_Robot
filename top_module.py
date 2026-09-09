@@ -4,6 +4,7 @@ NEXUS Person Follower Robot — Central Top Module (top_module.py)
 =================================================================
 File: top_module.py (Application Coordinator)
 Adheres to:
+- docs/revision/revision_concept.md
 - docs/2_system_design/state_machine.md
 - docs/3_software_design/software_architecture.md (Section 3: Layer Architecture)
 - docs/3_software_design/module_specification.md (Section 2: Application Coordinator)
@@ -18,14 +19,18 @@ Responsibility:
        - Exclusive target lock on the person presenting the password
        - Anti-hijack (rejection of gestures from unauthorized persons)
        - Automatic transition to NEXUS OFF if target is lost for > 3.0s
-    6. State Machine Coordination (NexusStateMachine)
-    7. Composite HUD & Telemetry Visualization
+    6. Follow Controller / Steering Evaluator (follow_controller.py)
+       - Evaluates target dx with ±0.15 deadzone -> produces ('-', 'x', '+', 's')
+    7. ESP32 UART Serial Bridge (esp32_uart.py)
+       - Transmits 1-byte command to ESP32 motor controller (with simulation fallback)
+    8. State Machine Coordination (NexusStateMachine)
+    9. Composite HUD & Telemetry Visualization (with UART Command Badge)
 
 Usage:
     python3 top_module.py
     python3 top_module.py --source 0
-    python3 top_module.py --source path/to/video.mp4
-    python3 top_module.py --no-flip  (disable horizontal un-mirror)
+    python3 top_module.py --port /dev/ttyUSB0
+    python3 top_module.py --no-uart  (run without serial hardware)
 """
 
 import argparse
@@ -43,7 +48,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Import NEXUS vision & target tracking modules
+# Import NEXUS perception, target, control, and communication modules
 from raspberry_pi.vision.person_detection import PersonDetection, PersonDetector
 from raspberry_pi.vision.gesture_recognition import GestureDetection, GestureRecognizer
 from locking_target import (
@@ -54,6 +59,8 @@ from locking_target import (
     TargetEvent,
     draw_target_overlay
 )
+from follow_controller import FollowController, SteeringCommand
+from esp32_uart import Esp32UartBridge
 
 
 # =============================================================================
@@ -135,6 +142,8 @@ def draw_top_module_hud(
     tracks: List[TrackedPerson],
     gestures: List[GestureDetection],
     target_manager: TargetLockManager,
+    steering_cmd: SteeringCommand,
+    uart_status: str,
     status_msg: str,
     latency_ms: float,
     fps: float,
@@ -143,7 +152,7 @@ def draw_top_module_hud(
 ) -> np.ndarray:
     """
     Renders top module HUD with Target Locking, Hand Gestures,
-    Master State Banner, and system telemetry.
+    Master State Banner, Steering Command Badge, and system telemetry.
     """
     canvas = frame.copy()
     h, w = canvas.shape[:2]
@@ -178,7 +187,7 @@ def draw_top_module_hud(
     # -------------------------------------------------------------------------
     # C. Top Center Master State Banner
     # -------------------------------------------------------------------------
-    banner_w, banner_h = 380, 54
+    banner_w, banner_h = 380, 52
     bx1 = (w - banner_w) // 2
     by1 = 12
     bx2 = bx1 + banner_w
@@ -229,16 +238,48 @@ def draw_top_module_hud(
     # Subtitle Instruction / Cooldown Text
     (stw, sth), sbl = cv2.getTextSize(sub_text, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
     stx = bx1 + (banner_w - stw) // 2
-    sty = by1 + 46
+    sty = by1 + 45
     cv2.putText(canvas, sub_text, (stx, sty),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.38, (235, 235, 235), 1, cv2.LINE_AA)
 
     # -------------------------------------------------------------------------
-    # D. Telemetry & Counters
+    # D. Steering Command Badge (ESP32 UART Output Indicator)
+    # -------------------------------------------------------------------------
+    cmd_w, cmd_h = 240, 28
+    cx1 = (w - cmd_w) // 2
+    cy1 = by2 + 6
+    cx2 = cx1 + cmd_w
+    cy2 = cy1 + cmd_h
+
+    # Select color & icon based on active command
+    if steering_cmd == SteeringCommand.LEFT:
+        cmd_bg = (0, 140, 255)       # Amber/Orange for Left
+        cmd_text = "◄◄ BELOK KIRI [-]"
+    elif steering_cmd == SteeringCommand.RIGHT:
+        cmd_bg = (0, 140, 255)       # Amber/Orange for Right
+        cmd_text = "BELOK KANAN [+] ►►"
+    elif steering_cmd == SteeringCommand.CENTER:
+        cmd_bg = (0, 180, 0)         # Vibrant Green for Center
+        cmd_text = "▲ TARGET CENTER [x] ▲"
+    else:
+        cmd_bg = (45, 45, 45)         # Dark Gray for Stop
+        cmd_text = "■ MOTOR STOP [s] ■"
+
+    cv2.rectangle(canvas, (cx1, cy1), (cx2, cy2), cmd_bg, -1)
+    cv2.rectangle(canvas, (cx1, cy1), (cx2, cy2), (220, 220, 220), 1)
+
+    (ctw, cth), cbl = cv2.getTextSize(cmd_text, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 2)
+    ctx = cx1 + (cmd_w - ctw) // 2
+    cty = cy1 + (cmd_h + cth) // 2 - 2
+    cv2.putText(canvas, cmd_text, (ctx, cty),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2, cv2.LINE_AA)
+
+    # -------------------------------------------------------------------------
+    # E. Telemetry & Counters
     # -------------------------------------------------------------------------
     # Top Left: Perception & Target Status Box
-    cv2.rectangle(canvas, (10, 10), (200, 75), (30, 30, 30), -1)
-    cv2.rectangle(canvas, (10, 10), (200, 75), (70, 70, 70), 1)
+    cv2.rectangle(canvas, (10, 10), (220, 80), (30, 30, 30), -1)
+    cv2.rectangle(canvas, (10, 10), (220, 80), (70, 70, 70), 1)
 
     target_str = f"#{target_manager.locked_target_id}" if target_manager.locked_target_id is not None else "None"
     status_col = (0, 215, 255) if target_manager.is_locked else (180, 180, 180)
@@ -247,8 +288,8 @@ def draw_top_module_hud(
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
     cv2.putText(canvas, f"Target : {target_str} ({target_manager.status.value})", (18, 48),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, status_col, 1, cv2.LINE_AA)
-    cv2.putText(canvas, f"Hands  : {len(gestures)}", (18, 68),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 215, 255), 1, cv2.LINE_AA)
+    cv2.putText(canvas, f"UART   : {uart_status[:18]}", (18, 68),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 220, 255), 1, cv2.LINE_AA)
 
     # Top Right: Flip / Mirror status
     flip_str = f"Flip: {'ON' if is_flipped else 'OFF'} (Key 'm')"
@@ -257,7 +298,7 @@ def draw_top_module_hud(
 
     # Bottom Overlay: Performance & Event status
     cv2.rectangle(canvas, (10, h - 35), (w - 10, h - 10), (25, 25, 25), -1)
-    info_str = f"Speed: {fps:4.1f} FPS | Latency: {latency_ms:5.1f} ms | Status: {status_msg}"
+    info_str = f"Speed: {fps:4.1f} FPS | Latency: {latency_ms:5.1f} ms | UART CMD: [{steering_cmd.value}] | Status: {status_msg}"
     cv2.putText(canvas, info_str, (18, h - 18),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
 
@@ -277,7 +318,11 @@ class TopModule:
         model_path: Optional[Path] = None,
         conf_threshold: float = 0.50,
         flip_horizontal: bool = True,
-        target_loss_timeout: float = 3.0
+        target_loss_timeout: float = 3.0,
+        serial_port: Optional[str] = "auto",
+        baudrate: int = 115200,
+        no_uart: bool = False,
+        deadzone: float = 0.15
     ):
         print("=" * 65)
         print("NEXUS PERSON FOLLOWER ROBOT — TOP MODULE INITIALIZATION")
@@ -301,14 +346,26 @@ class TopModule:
         self.target_manager = TargetLockManager(loss_timeout_seconds=target_loss_timeout)
         print(f"[TopModule] Target Lock Manager Initialized (Loss Timeout: {target_loss_timeout:.1f}s)")
 
-        # 5. Initialize Gesture Recognizer (MediaPipe Open Palm 🖐️ with OpenCV Face Exclusion)
+        # 5. Initialize Follow Controller (Deadzone ±0.15 for -, x, + steering)
+        self.follow_controller = FollowController(deadzone=deadzone)
+        print(f"[TopModule] Follow Controller Initialized (Deadzone: ±{deadzone*100:.0f}%)")
+
+        # 6. Initialize ESP32 UART Serial Bridge
+        self.uart_bridge = Esp32UartBridge(
+            port=serial_port,
+            baudrate=baudrate,
+            enabled=not no_uart
+        )
+        print(f"[TopModule] UART Bridge: {self.uart_bridge.status_label}")
+
+        # 7. Initialize Gesture Recognizer (MediaPipe Open Palm 🖐️ with OpenCV Face Exclusion)
         self.gesture_recognizer = GestureRecognizer(
             min_detection_confidence=0.60,
             required_consecutive_frames=2,
             cooldown_seconds=3.0
         )
 
-        # 6. Display preferences
+        # 8. Display preferences
         self.flip_horizontal = flip_horizontal
         print(f"[TopModule] Horizontal Flip (Un-mirror): {'ENABLED' if self.flip_horizontal else 'DISABLED'}")
         print("=" * 65)
@@ -352,6 +409,8 @@ class TopModule:
                 # Step 0: Apply horizontal flip for natural webcam view
                 if self.flip_horizontal:
                     frame = cv2.flip(frame, 1)
+
+                frame_h, frame_w = frame.shape[:2]
 
                 # Step 1: Person Detection (YOLO)
                 raw_persons = self.person_detector.detect(frame)
@@ -427,7 +486,21 @@ class TopModule:
                                 )
                                 print(f"\n[TopModule] ⛔ Deactivation rejected: Hand belongs to Person #{hijack_id}, not Target #{self.target_manager.locked_target_id}!")
 
-                # Step 6: Telemetry & Benchmark
+                # Step 6: Follow Control & ESP32 UART Transmission
+                current_target = (
+                    self.target_manager.locked_person
+                    if self.target_manager.is_target_present
+                    else None
+                )
+                steering_cmd = self.follow_controller.evaluate(
+                    is_active=(self.state_machine.state == NexusState.ON),
+                    target_manager=self.target_manager,
+                    target_person=current_target,
+                    frame_width=frame_w
+                )
+                self.uart_bridge.send_command(steering_cmd.value)
+
+                # Step 7: Telemetry & Benchmark
                 t_latency = (time.perf_counter() - t_start) * 1000.0
                 fps_val = 1000.0 / t_latency if t_latency > 0 else 0.0
                 fps_buffer.append(fps_val)
@@ -435,13 +508,15 @@ class TopModule:
                     fps_buffer.pop(0)
                 avg_fps = sum(fps_buffer) / len(fps_buffer)
 
-                # Step 7: Render Composite HUD
+                # Step 8: Render Composite HUD
                 annotated_frame = draw_top_module_hud(
                     frame=frame,
                     state=self.state_machine.state,
                     tracks=tracks,
                     gestures=gestures,
                     target_manager=self.target_manager,
+                    steering_cmd=steering_cmd,
+                    uart_status=self.uart_bridge.status_label,
                     status_msg=self.state_machine.status_message,
                     latency_ms=t_latency,
                     fps=avg_fps,
@@ -452,8 +527,9 @@ class TopModule:
                 # Terminal telemetry log
                 target_str = f"#{self.target_manager.locked_target_id}" if self.target_manager.locked_target_id else "None"
                 term_msg = (
-                    f"\r[{self.state_machine.state.value}] Target: {target_str} ({self.target_manager.status.value}) | "
-                    f"Tracks: {len(tracks)} | Hands: {len(gestures)} | Latency: {t_latency:5.1f} ms | FPS: {avg_fps:4.1f}"
+                    f"\r[{self.state_machine.state.value}] Target: {target_str} | "
+                    f"Cmd: [{steering_cmd.value}] | Tracks: {len(tracks)} | "
+                    f"Latency: {t_latency:5.1f} ms | FPS: {avg_fps:4.1f}"
                 )
                 sys.stdout.write(term_msg)
                 sys.stdout.flush()
@@ -484,6 +560,7 @@ class TopModule:
             print("\n[TopModule] KeyboardInterrupt caught.")
         finally:
             cap.release()
+            self.uart_bridge.close()
             if writer:
                 writer.release()
             if show:
@@ -516,6 +593,22 @@ def main():
         help="Timeout in seconds before target loss triggers NEXUS OFF"
     )
     parser.add_argument(
+        "--deadzone", type=float, default=0.15,
+        help="Steering deadzone ratio (+/- from center)"
+    )
+    parser.add_argument(
+        "--port", type=str, default="auto",
+        help="ESP32 serial port (e.g. /dev/ttyUSB0, /dev/ttyACM0, or 'auto')"
+    )
+    parser.add_argument(
+        "--baud", type=int, default=115200,
+        help="ESP32 UART serial baudrate"
+    )
+    parser.add_argument(
+        "--no-uart", action="store_true",
+        help="Disable physical UART serial and force simulation mode"
+    )
+    parser.add_argument(
         "--no-flip", action="store_true",
         help="Disable horizontal flip (keep raw camera sensor orientation)"
     )
@@ -534,7 +627,11 @@ def main():
         model_path=Path(args.model) if args.model else None,
         conf_threshold=args.conf,
         flip_horizontal=not args.no_flip,
-        target_loss_timeout=args.loss_timeout
+        target_loss_timeout=args.loss_timeout,
+        serial_port=args.port,
+        baudrate=args.baud,
+        no_uart=args.no_uart,
+        deadzone=args.deadzone
     )
 
     save_target = Path(args.save) if args.save else None
