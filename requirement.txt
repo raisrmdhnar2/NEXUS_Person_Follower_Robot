@@ -1,0 +1,38 @@
+# =============================================================================
+# NEXUS Person Follower Robot — Project Dependencies (requirement.txt)
+# =============================================================================
+# Compatible with:
+#   - Development PC / Laptop (Linux / Windows / macOS x86_64)
+#   - Target Hardware: Raspberry Pi 5 (Raspberry Pi OS 64-bit Bookworm / aarch64)
+#   - Python Version: Python 3.10 - 3.11 (Recommended)
+#
+# Installation:
+#   pip install --upgrade pip
+#   pip install -r requirement.txt
+# =============================================================================
+
+# --- 1. Core Numerical & Computer Vision ---
+numpy>=1.24.0,<2.4.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# --- 2. Person Detection (YOLOv8 & ONNX Runtime Engine) ---
+ultralytics>=8.1.0
+onnx>=1.14.0
+onnxruntime>=1.16.0
+
+# --- 3. Hand Gesture Recognition (MediaPipe Tasks 3D Landmarks) ---
+mediapipe>=0.10.9
+
+# --- 4. Hardware Serial Communication (ESP32 UART Bridge) ---
+pyserial>=3.5
+
+# --- 5. Display HMI & JARVIS Voice Audio Playback ---
+pygame>=2.5.0
+edge-tts>=6.1.9
+
+# --- 6. Data, Configuration & Model Evaluation Utilities ---
+PyYAML>=6.0
+matplotlib>=3.7.0
+pandas>=2.0.0
+tqdm>=4.65.0
