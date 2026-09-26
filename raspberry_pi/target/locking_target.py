@@ -478,6 +478,95 @@ class TargetLockManager:
 
 
 # =============================================================================
+# 4.5 Fast Visual Object Tracker (OpenCV KCF/CSRT/MIL)
+# =============================================================================
+class FastVisualTracker:
+    """
+    OpenCV High-Speed Visual Object Tracker.
+    Tracks a locked target frame-by-frame with ~2-4 ms compute time on Raspberry Pi 4,
+    eliminating the heavy 450-700ms YOLO inference on every frame during NEXUS ON.
+    """
+    def __init__(self):
+        self.tracker = None
+        self.is_tracking = False
+        self.current_bbox: Optional[Tuple[int, int, int, int]] = None
+
+    def _create_tracker(self):
+        # Prefer KCF (~2 ms on Raspberry Pi) or MIL/CSRT
+        for creator in [
+            lambda: cv2.TrackerKCF_create() if hasattr(cv2, "TrackerKCF_create") else None,
+            lambda: cv2.TrackerKCF.create() if hasattr(cv2, "TrackerKCF") and hasattr(cv2.TrackerKCF, "create") else None,
+            lambda: cv2.TrackerMIL_create() if hasattr(cv2, "TrackerMIL_create") else None,
+            lambda: cv2.TrackerMIL.create() if hasattr(cv2, "TrackerMIL") and hasattr(cv2.TrackerMIL, "create") else None,
+            lambda: cv2.TrackerCSRT_create() if hasattr(cv2, "TrackerCSRT_create") else None,
+            lambda: cv2.TrackerCSRT.create() if hasattr(cv2, "TrackerCSRT") and hasattr(cv2.TrackerCSRT, "create") else None,
+        ]:
+            try:
+                t = creator()
+                if t is not None:
+                    return t
+            except Exception:
+                continue
+        return None
+
+    def start_track(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
+        """Initializes tracker on target bounding box (x1, y1, x2, y2)."""
+        if frame is None or frame.size == 0 or bbox is None:
+            return False
+
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        w = max(10, x2 - x1)
+        h = max(10, y2 - y1)
+        rect = (x1, y1, w, h)
+
+        try:
+            self.tracker = self._create_tracker()
+            if self.tracker is not None:
+                self.tracker.init(frame, rect)
+                self.is_tracking = True
+                self.current_bbox = (x1, y1, x2, y2)
+                return True
+        except Exception as e:
+            print(f"[FastVisualTracker] Warning starting tracker: {e}")
+
+        self.is_tracking = False
+        return False
+
+    def update(self, frame: np.ndarray) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
+        """
+        Updates target position on new frame.
+        Execution time: ~2-4 ms on Raspberry Pi CPU!
+        """
+        if not self.is_tracking or self.tracker is None or frame is None:
+            return False, None
+
+        fh, fw = frame.shape[:2]
+        try:
+            ok, rect = self.tracker.update(frame)
+            if ok:
+                x, y, w, h = [int(v) for v in rect]
+                x1 = max(0, min(fw - 1, x))
+                y1 = max(0, min(fh - 1, y))
+                x2 = max(0, min(fw, x + w))
+                y2 = max(0, min(fh, y + h))
+
+                if (x2 - x1) > 15 and (y2 - y1) > 20:
+                    self.current_bbox = (x1, y1, x2, y2)
+                    return True, self.current_bbox
+        except Exception:
+            pass
+
+        self.is_tracking = False
+        return False, None
+
+    def stop(self):
+        """Stops the visual tracker."""
+        self.is_tracking = False
+        self.tracker = None
+        self.current_bbox = None
+
+
+# =============================================================================
 # 5. Target & Tracking Overlay Drawing Helper
 # =============================================================================
 def draw_target_overlay(

@@ -48,11 +48,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Import NEXUS perception, target, control, and communication modules
+# Import NEXUS perception, target, control, communication, and UI modules
 from raspberry_pi.vision.person_detection import PersonDetection, PersonDetector
 from raspberry_pi.vision.gesture_recognition import GestureDetection, GestureRecognizer
 from raspberry_pi.vision.threaded_camera import ThreadedCamera
 from raspberry_pi.target.locking_target import (
+    FastVisualTracker,
     PersonTracker,
     TargetLockManager,
     TrackedPerson,
@@ -62,6 +63,8 @@ from raspberry_pi.target.locking_target import (
 )
 from raspberry_pi.control.follow_controller import FollowController, SteeringCommand
 from raspberry_pi.communication.esp32_uart import Esp32UartBridge
+from raspberry_pi.ui.speech_manager import SpeechManager, VoiceEvent
+from raspberry_pi.ui.greeting_manager import GreetingManager
 
 
 # =============================================================================
@@ -73,13 +76,14 @@ class NexusState(Enum):
     Matches docs/2_system_design/state_machine.md.
     """
     OFF = "Nexus Off"
+    GREETING = "Greeting"
     ON = "Nexus On"
 
 
 class NexusStateMachine:
     """
     State machine coordinator for NEXUS.
-    Manages transitions between 'Nexus Off' and 'Nexus On'.
+    Manages transitions between 'Nexus Off', 'Greeting', and 'Nexus On'.
     """
 
     def __init__(self, toggle_cooldown: float = 3.0):
@@ -99,6 +103,24 @@ class NexusStateMachine:
     def is_in_cooldown(self) -> bool:
         return self.cooldown_remaining > 0.0
 
+    def start_greeting(self, reason: str = "Visitor Detected") -> bool:
+        """Transitions from OFF to GREETING when a visitor is detected."""
+        if self.state == NexusState.OFF:
+            self.state = NexusState.GREETING
+            self.status_message = f"{reason} -> Greeting Visitor..."
+            print(f"\n[STATE TRANSITION] >>> GREETING <<< ({reason})")
+            return True
+        return False
+
+    def finish_greeting(self) -> bool:
+        """Transitions from GREETING back to OFF when greeting speech finishes."""
+        if self.state == NexusState.GREETING:
+            self.state = NexusState.OFF
+            self.status_message = "Greeting Finished. Standby: Nexus Off"
+            print(f"\n[STATE TRANSITION] >>> NEXUS OFF <<< (Greeting Finished)")
+            return True
+        return False
+
     def force_off(self, reason: str = "Target Lost Timeout") -> None:
         """
         Forces transition to NEXUS OFF regardless of cooldown
@@ -113,6 +135,7 @@ class NexusStateMachine:
     def handle_password_gesture(self, reason: str = "Password Accepted") -> bool:
         """
         Executes state transition when an authorized password gesture occurs.
+        Transitions from OFF/GREETING -> ON, or from ON -> OFF.
         Enforces toggle cooldown to prevent rapid state flickering.
         """
         now = time.time()
@@ -122,7 +145,7 @@ class NexusStateMachine:
         self.last_transition_time = now
         self.transition_count += 1
 
-        if self.state == NexusState.OFF:
+        if self.state in [NexusState.OFF, NexusState.GREETING]:
             self.state = NexusState.ON
             self.status_message = f"{reason}! -> NEXUS ON (Cooldown {self.toggle_cooldown:.1f}s)"
             print(f"\n[STATE TRANSITION #{self.transition_count}] >>> NEXUS ON <<< ({reason})")
@@ -216,6 +239,12 @@ def draw_top_module_hud(
             border_color = (0, 255, 100)
             state_text = "NEXUS ON"
             sub_text = "Active | 🖐️ Open Palm to Deactivate"
+    elif state == NexusState.GREETING:
+        # Deep Blue / Cyan Banner for Greeting Visitor
+        bg_color = (130, 80, 0)
+        border_color = (255, 200, 0)
+        state_text = "GREETING VISITOR"
+        sub_text = "JARVIS Voice Playing... | 🖐️ Show Palm to Lock & Follow"
     else:
         # Crimson / Dark Red Banner for OFF
         bg_color = (30, 30, 160)
@@ -327,6 +356,10 @@ class TopModule:
         img_size: int = 640,
         gesture_interval: int = 4,
         detect_interval: int = 1,
+        sync_interval: int = 45,
+        no_speech: bool = False,
+        greeting_cooldown: float = 15.0,
+        greeting_empty_reset: float = 5.0,
         use_threaded_cam: bool = True,
         use_mjpeg: bool = False
     ):
@@ -355,6 +388,10 @@ class TopModule:
         self.target_manager = TargetLockManager(loss_timeout_seconds=target_loss_timeout)
         print(f"[TopModule] Target Lock Manager Initialized (Loss Timeout: {target_loss_timeout:.1f}s)")
 
+        # 4.5 Initialize Fast Visual Object Tracker (OpenCV KCF/CSRT)
+        self.visual_tracker = FastVisualTracker()
+        print(f"[TopModule] Fast Visual Tracker Initialized (OpenCV KCF/CSRT)")
+
         # 5. Initialize Follow Controller (Deadzone ±0.15 for -, x, + steering)
         self.follow_controller = FollowController(deadzone=deadzone)
         print(f"[TopModule] Follow Controller Initialized (Deadzone: ±{deadzone*100:.0f}%)")
@@ -367,6 +404,19 @@ class TopModule:
         )
         print(f"[TopModule] UART Bridge: {self.uart_bridge.status_label}")
 
+        # 6.5 Initialize Speech and Audio Manager (JARVIS voice)
+        self.speech_manager = SpeechManager(enabled=not no_speech)
+
+        # 6.6 Initialize Greeting Manager (3-layer anti-spam)
+        self.greeting_manager = GreetingManager(
+            cooldown_seconds=greeting_cooldown,
+            empty_reset_seconds=greeting_empty_reset
+        )
+
+        # Periodic check-in timing while following
+        self.last_following_checkin = 0.0
+        self.following_checkin_interval = 45.0  # seconds
+
         # 7. Initialize Gesture Recognizer (MediaPipe Open Palm 🖐️ with OpenCV Face Exclusion)
         self.gesture_recognizer = GestureRecognizer(
             min_detection_confidence=0.60,
@@ -378,13 +428,21 @@ class TopModule:
         self.flip_horizontal = flip_horizontal
         self.gesture_interval = max(1, int(gesture_interval))
         self.detect_interval = max(1, int(detect_interval))
+        self.sync_interval = max(0, int(sync_interval))
         self.use_threaded_cam = use_threaded_cam
 
         print(f"[TopModule] Horizontal Flip (Un-mirror): {'ENABLED' if self.flip_horizontal else 'DISABLED'}")
         print(f"[TopModule] High-Speed Pipeline -> Resolution: {self.img_size}x{self.img_size} | "
               f"Gesture Interval: Every {self.gesture_interval} frames | "
-              f"Threaded Cam: {'ENABLED' if self.use_threaded_cam else 'DISABLED'}")
+              f"Tracker: FastVisualTracker (OpenCV ~2-4ms) | "
+              f"Audio / Speech: {'ENABLED' if not no_speech else 'MUTED'}")
         print("=" * 65)
+
+    def _on_greeting_complete(self):
+        """Callback invoked when startup greeting audio finishes."""
+        self.greeting_manager.finish_greeting()
+        if self.state_machine.state == NexusState.GREETING:
+            self.state_machine.finish_greeting()
 
     def run(self, source: str = "0", show: bool = True, save_path: Optional[Path] = None):
         """
@@ -449,38 +507,110 @@ class TopModule:
 
                 frame_h, frame_w = frame.shape[:2]
 
-                # Step 1: Person Detection (YOLO with detect_interval)
-                if frame_idx % self.detect_interval == 0:
-                    raw_persons = self.person_detector.detect(frame)
-                    last_raw_persons = raw_persons
-                else:
-                    raw_persons = last_raw_persons
-
-                # Step 2: Person Tracking (Runs on every frame at full 30 FPS)
-                tracks = self.tracker.update(raw_persons)
-
-                # Step 3: Gesture Recognition (Smart Sampling with gesture_interval)
-                if frame_idx % self.gesture_interval == 0:
-                    gestures = self.gesture_recognizer.detect(frame, persons=raw_persons)
-                    last_gestures = gestures
-                else:
-                    gestures = last_gestures
-
-                frame_idx += 1
-
-                # Step 4: Target Lock Update & Loss Timeout Monitoring
+                # Step 1, 2 & 3: State-Driven Perception Pipeline
                 if self.state_machine.state == NexusState.ON:
-                    locked_person, target_event = self.target_manager.update(tracks)
-                    if target_event == TargetEvent.TARGET_LOST_TIMEOUT:
-                        # TARGET LOST FOR > 3.0 SECONDS -> AUTOMATICALLY NEXUS OFF!
-                        self.state_machine.force_off("Target Lost Timeout (>3.0s)")
+                    # =========================================================
+                    # [PILLAR 1] NEXUS ON: FAST VISUAL TRACKER PIPELINE (~2-4ms)
+                    # =========================================================
+                    track_ok = False
+                    tracked_bbox = None
+                    if self.visual_tracker.is_tracking:
+                        track_ok, tracked_bbox = self.visual_tracker.update(frame)
 
-                # Step 5: Password Gesture Handling & Association
-                if self.gesture_recognizer.check_password_event(gestures):
-                    pwd_gesture = next((g for g in gestures if g.is_open_palm), None)
+                    need_yolo_sync = (not track_ok) or (self.sync_interval > 0 and frame_idx % self.sync_interval == 0)
 
+                    if need_yolo_sync:
+                        raw_persons = self.person_detector.detect(frame)
+                        last_raw_persons = raw_persons
+                        tracks = self.tracker.update(raw_persons)
+                        locked_person, target_event = self.target_manager.update(tracks)
+
+                        if self.target_manager.is_target_present and self.target_manager.locked_person is not None:
+                            self.visual_tracker.start_track(frame, self.target_manager.locked_person.bbox)
+                        elif target_event == TargetEvent.TARGET_LOST:
+                            # Target temporarily lost (<3.0s) -> Speech: "Where are you?"
+                            self.speech_manager.speak_target_lost()
+                        elif target_event == TargetEvent.TARGET_LOST_TIMEOUT:
+                            # Target missing > 3.0s -> Speech: "I can't find you." -> NEXUS OFF!
+                            self.visual_tracker.stop()
+                            self.speech_manager.speak_target_timeout()
+                            self.state_machine.force_off("Target Lost Timeout (>3.0s)")
+                    else:
+                        # High-speed tracking path (~2-4 ms compute time)
+                        if self.target_manager.locked_person is not None and tracked_bbox is not None:
+                            self.target_manager.locked_person.bbox = tracked_bbox
+                            self.target_manager.locked_person.last_seen_timestamp = time.time()
+                            self.target_manager.locked_person.missed_frames = 0
+                            self.target_manager.status = TargetStatus.LOCKED
+                            self.target_manager.last_seen_time = time.time()
+                            self.target_manager.loss_start_time = None
+                            tracks = [self.target_manager.locked_person]
+                        else:
+                            tracks = []
+
+                    # Periodic Following Check-in ("I'm right behind you.")
+                    now_t = time.time()
+                    if self.target_manager.is_target_present and (now_t - self.last_following_checkin) >= self.following_checkin_interval:
+                        self.last_following_checkin = now_t
+                        self.speech_manager.speak_following()
+
+                    # =========================================================
+                    # [PILLAR 2] FAST CROP-ROI MEDIAPIPE GESTURE RECOGNITION (~15ms)
+                    # =========================================================
+                    if frame_idx % self.gesture_interval == 0:
+                        if self.target_manager.is_target_present and self.target_manager.locked_person is not None:
+                            gestures = self.gesture_recognizer.detect_roi(
+                                frame, self.target_manager.locked_person.bbox
+                            )
+                        else:
+                            gestures = []
+                        last_gestures = gestures
+                    else:
+                        gestures = last_gestures
+
+                    # Check Deactivation Password Gesture (🖐️ Open Palm from target)
+                    if self.gesture_recognizer.check_password_event(gestures):
+                        pwd_gesture = next((g for g in gestures if g.is_open_palm), None)
+                        if pwd_gesture is not None and not self.state_machine.is_in_cooldown:
+                            self.visual_tracker.stop()
+                            self.target_manager.unlock_target()
+                            self.speech_manager.speak_deactivation()
+                            self.state_machine.handle_password_gesture(
+                                reason="Target Deactivation Accepted"
+                            )
+
+                else:
+                    # =========================================================
+                    # NEXUS OFF / GREETING: SCANNING / DETECTION PIPELINE
+                    # =========================================================
+                    # Step 1: Person Detection (YOLO with detect_interval)
+                    if frame_idx % self.detect_interval == 0:
+                        raw_persons = self.person_detector.detect(frame)
+                        last_raw_persons = raw_persons
+                    else:
+                        raw_persons = last_raw_persons
+
+                    # Step 2: Multi-Person Tracking (IoU-based)
+                    tracks = self.tracker.update(raw_persons)
+
+                    # Step 3: Full-Frame Gesture Recognition (sampled with gesture_interval)
+                    if frame_idx % self.gesture_interval == 0:
+                        gestures = self.gesture_recognizer.detect(frame, persons=raw_persons)
+                        last_gestures = gestures
+                    else:
+                        gestures = last_gestures
+
+                    # Step 4: Visitor Greeting Check (3-Layer Anti-Spam)
                     if self.state_machine.state == NexusState.OFF:
-                        # In OFF state: check cooldown first
+                        should_greet, cand_id = self.greeting_manager.evaluate(tracks, is_off_state=True)
+                        if should_greet and cand_id is not None:
+                            self.greeting_manager.mark_greeted(cand_id)
+                            self.state_machine.start_greeting(reason=f"Visitor #{cand_id} Detected")
+                            self.speech_manager.speak_greeting(on_complete=self._on_greeting_complete)
+
+                    # Step 5: Activation Password Gesture Check (🖐️ Open Palm to Lock & Follow)
+                    if self.gesture_recognizer.check_password_event(gestures):
+                        pwd_gesture = next((g for g in gestures if g.is_open_palm), None)
                         if not self.state_machine.is_in_cooldown:
                             candidate: Optional[TrackedPerson] = None
                             if pwd_gesture and tracks:
@@ -489,49 +619,31 @@ class TopModule:
                                 )
 
                             if candidate is not None:
-                                # Target successfully identified and locked
+                                self.speech_manager.stop()
+                                self.greeting_manager.finish_greeting()
                                 self.target_manager.lock_target(candidate.track_id, candidate)
+                                self.visual_tracker.start_track(frame, candidate.bbox)
                                 self.state_machine.handle_password_gesture(
                                     reason=f"Target #{candidate.track_id} Locked"
                                 )
+                                self.speech_manager.speak_activation()
+                                self.last_following_checkin = time.time()
                             elif tracks:
-                                # Fallback: lock closest visible tracked person
                                 candidate = tracks[0]
+                                self.speech_manager.stop()
+                                self.greeting_manager.finish_greeting()
                                 self.target_manager.lock_target(candidate.track_id, candidate)
+                                self.visual_tracker.start_track(frame, candidate.bbox)
                                 self.state_machine.handle_password_gesture(
                                     reason=f"Target #{candidate.track_id} Locked"
                                 )
+                                self.speech_manager.speak_activation()
+                                self.last_following_checkin = time.time()
                             else:
                                 self.state_machine.status_message = "Password seen, but no person detected to lock!"
                                 print("\n[TopModule] Password seen, but no person detected to lock.")
 
-                    elif self.state_machine.state == NexusState.ON:
-                        # In ON state: Anti-hijack verification
-                        if not self.state_machine.is_in_cooldown:
-                            candidate = None
-                            if pwd_gesture and tracks:
-                                candidate = self.target_manager.associate_gesture_with_person(
-                                    tracks, pwd_gesture
-                                )
-
-                            # Verify if the gesture comes from the locked target
-                            if candidate and candidate.track_id == self.target_manager.locked_target_id:
-                                self.target_manager.unlock_target()
-                                self.state_machine.handle_password_gesture(
-                                    reason="Target Deactivation Accepted"
-                                )
-                            elif self.target_manager.locked_target_id is None:
-                                # Target wasn't locked, allow turning off
-                                self.target_manager.unlock_target()
-                                self.state_machine.handle_password_gesture(
-                                    reason="Deactivation Accepted"
-                                )
-                            else:
-                                hijack_id = candidate.track_id if candidate else "Unknown"
-                                self.state_machine.status_message = (
-                                    f"⛔ Rejected: Hand from #{hijack_id}, not Target #{self.target_manager.locked_target_id}!"
-                                )
-                                print(f"\n[TopModule] ⛔ Deactivation rejected: Hand belongs to Person #{hijack_id}, not Target #{self.target_manager.locked_target_id}!")
+                frame_idx += 1
 
                 # Step 6: Follow Control & ESP32 UART Transmission
                 current_target = (
@@ -595,17 +707,35 @@ class TopModule:
                         print(f"\n[Mirror Toggle] Flip: {'ENABLED' if self.flip_horizontal else 'DISABLED'}")
                     elif key in [ord("t"), ord("T"), ord("p"), ord("P")]:
                         # Manual password toggle event (Press 'p' or 't')
-                        if self.state_machine.state == NexusState.OFF:
+                        if self.state_machine.state in [NexusState.OFF, NexusState.GREETING]:
                             if tracks:
+                                self.speech_manager.stop()
+                                self.greeting_manager.finish_greeting()
                                 self.target_manager.lock_target(tracks[0].track_id, tracks[0])
+                                self.visual_tracker.start_track(frame, tracks[0].bbox)
+                            self.speech_manager.speak_activation()
+                            self.last_following_checkin = time.time()
                             self.state_machine.handle_password_gesture(reason="Manual Key Toggle")
                         else:
+                            self.visual_tracker.stop()
                             self.target_manager.unlock_target()
+                            self.speech_manager.speak_deactivation()
                             self.state_machine.handle_password_gesture(reason="Manual Key Toggle")
+                    elif key in [ord("u"), ord("U")]:
+                        # Manual target unlock (Press 'u')
+                        self.visual_tracker.stop()
+                        self.target_manager.unlock_target()
+                        self.speech_manager.speak_deactivation()
+                        if self.state_machine.state == NexusState.ON:
+                            self.state_machine.force_off("Manual Target Unlock")
 
         except KeyboardInterrupt:
             print("\n[TopModule] KeyboardInterrupt caught.")
         finally:
+            if hasattr(self, "visual_tracker"):
+                self.visual_tracker.stop()
+            if hasattr(self, "speech_manager"):
+                self.speech_manager.stop()
             if hasattr(cap, "stop"):
                 cap.stop()
             elif hasattr(cap, "release"):
@@ -649,6 +779,22 @@ def main():
     parser.add_argument(
         "--detect-interval", type=int, default=1,
         help="Execute YOLO person detection every N frames (default 1; set 2 for even higher FPS)"
+    )
+    parser.add_argument(
+        "--sync-interval", type=int, default=45,
+        help="Frames between YOLO drift-correction checks during tracking (default 45; set 0 for on-loss only)"
+    )
+    parser.add_argument(
+        "--no-speech", action="store_true",
+        help="Mute audio dialogue playback (run speech in simulation mode)"
+    )
+    parser.add_argument(
+        "--greeting-cooldown", type=float, default=15.0,
+        help="Minimum cooldown time (seconds) between visitor startup greetings (Layer 3)"
+    )
+    parser.add_argument(
+        "--greeting-empty-reset", type=float, default=5.0,
+        help="Duration (seconds) camera must be empty to reset greeted memory for new visitors (Layer 2)"
     )
     parser.add_argument(
         "--no-threaded-cam", action="store_true",
@@ -705,6 +851,10 @@ def main():
         img_size=args.imgsz,
         gesture_interval=args.gesture_interval,
         detect_interval=args.detect_interval,
+        sync_interval=args.sync_interval,
+        no_speech=args.no_speech,
+        greeting_cooldown=args.greeting_cooldown,
+        greeting_empty_reset=args.greeting_empty_reset,
         use_threaded_cam=not args.no_threaded_cam,
         use_mjpeg=args.mjpeg
     )

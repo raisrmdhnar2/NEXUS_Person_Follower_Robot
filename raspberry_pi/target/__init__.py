@@ -3,6 +3,7 @@ NEXUS Person Follower Robot — Target Tracking & Locking Package
 """
 
 from .locking_target import (
+    FastVisualTracker,
     TargetStatus,
     TargetEvent,
     TrackedPerson,
@@ -13,6 +14,7 @@ from .locking_target import (
 )
 
 __all__ = [
+    "FastVisualTracker",
     "TargetStatus",
     "TargetEvent",
     "TrackedPerson",
