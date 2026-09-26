@@ -1,4 +1,5 @@
 nexus/ainexus
+nex_bot
 vncviewer 192.168.1.9
 
 python top_module.py --detect-interval 3

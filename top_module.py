@@ -327,7 +327,8 @@ class TopModule:
         img_size: int = 640,
         gesture_interval: int = 4,
         detect_interval: int = 1,
-        use_threaded_cam: bool = True
+        use_threaded_cam: bool = True,
+        use_mjpeg: bool = False
     ):
         print("=" * 65)
         print("NEXUS PERSON FOLLOWER ROBOT — TOP MODULE INITIALIZATION")
@@ -344,6 +345,7 @@ class TopModule:
             img_size=img_size
         )
         self.img_size = self.person_detector.img_size
+        self.use_mjpeg = use_mjpeg
 
         # 3. Initialize Multi-Person Tracker (IoU-based)
         self.tracker = PersonTracker(max_missed_frames=30, iou_threshold=0.25)
@@ -393,8 +395,15 @@ class TopModule:
 
         # Initialize Video Source (ThreadedCamera for USB/CSI cameras to eliminate lag)
         if is_camera and self.use_threaded_cam:
-            print(f"[TopModule] Initializing High-Speed Threaded Camera on source '{source}' (MJPG 640x480 @ 30 FPS)...")
-            cap = ThreadedCamera(source=src_id, width=640, height=480, fps=30).start()
+            codec_str = "MJPG" if self.use_mjpeg else "YUYV"
+            print(f"[TopModule] Initializing High-Speed Threaded Camera on source '{source}' ({codec_str} 640x480 @ 30 FPS)...")
+            cap = ThreadedCamera(
+                source=src_id,
+                width=640,
+                height=480,
+                fps=30,
+                use_mjpeg=self.use_mjpeg
+            ).start()
         else:
             print(f"[TopModule] Opening standard video source: {source}...")
             cap = cv2.VideoCapture(src_id)
@@ -646,6 +655,10 @@ def main():
         help="Disable asynchronous threaded camera and use standard blocking VideoCapture"
     )
     parser.add_argument(
+        "--mjpeg", action="store_true",
+        help="Request MJPEG camera codec instead of clean uncompressed YUYV (use only if camera requires it)"
+    )
+    parser.add_argument(
         "--loss-timeout", type=float, default=3.0,
         help="Timeout in seconds before target loss triggers NEXUS OFF"
     )
@@ -692,7 +705,8 @@ def main():
         img_size=args.imgsz,
         gesture_interval=args.gesture_interval,
         detect_interval=args.detect_interval,
-        use_threaded_cam=not args.no_threaded_cam
+        use_threaded_cam=not args.no_threaded_cam,
+        use_mjpeg=args.mjpeg
     )
 
     save_target = Path(args.save) if args.save else None

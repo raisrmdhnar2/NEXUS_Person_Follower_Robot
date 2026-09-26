@@ -36,7 +36,7 @@ class ThreadedCamera:
         width: int = 640,
         height: int = 480,
         fps: int = 30,
-        use_mjpeg: bool = True
+        use_mjpeg: bool = False
     ):
         """
         Initialize the threaded camera stream.
@@ -46,7 +46,7 @@ class ThreadedCamera:
             width: Desired capture frame width (default 640).
             height: Desired capture frame height (default 480).
             fps: Desired capture framerate (default 30).
-            use_mjpeg: If True, requests MJPG fourcc codec for low CPU USB decoding.
+            use_mjpeg: If True, requests MJPG fourcc codec. False uses clean uncompressed YUYV stream.
         """
         self.source = int(source) if str(source).isdigit() else source
         self.is_camera = isinstance(self.source, int) or (isinstance(self.source, str) and self.source.isdigit())
@@ -88,9 +88,12 @@ class ThreadedCamera:
             return False
 
         if self.is_camera:
-            # Configure high-speed MJPG encoding to prevent USB 2.0 bus bottleneck
+            # Configure camera codec (YUYV by default on Linux/Raspberry Pi to avoid Corrupt JPEG flood)
             if self.use_mjpeg:
                 fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+                self.cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+            else:
+                fourcc = cv2.VideoWriter_fourcc(*"YUYV")
                 self.cap.set(cv2.CAP_PROP_FOURCC, fourcc)
 
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.desired_width)
