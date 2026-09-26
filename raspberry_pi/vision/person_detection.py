@@ -104,7 +104,7 @@ class PersonDetector:
         model_path: Optional[Path] = None,
         conf_threshold: float = 0.50,
         iou_threshold: float = 0.45,
-        img_size: int = 640,
+        img_size: int = 320,
         device: Optional[str] = None
     ):
         if not ULTRALYTICS_AVAILABLE:

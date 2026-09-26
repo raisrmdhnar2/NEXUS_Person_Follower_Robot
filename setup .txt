@@ -1,0 +1,5 @@
+nexus/ainexus
+vncviewer 192.168.1.9
+
+python top_module.py --detect-interval 3
+python top_module.py --model models/yolo/yolov8n.pt --imgsz 320

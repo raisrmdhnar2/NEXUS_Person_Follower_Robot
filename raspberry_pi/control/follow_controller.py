@@ -25,7 +25,10 @@ from typing import Optional, Tuple
 import numpy as np
 
 # Import domain entities
-from locking_target import TargetLockManager, TrackedPerson, TargetStatus
+try:
+    from raspberry_pi.target.locking_target import TargetLockManager, TrackedPerson, TargetStatus
+except ImportError:
+    from locking_target import TargetLockManager, TrackedPerson, TargetStatus
 
 
 class SteeringCommand(str, Enum):

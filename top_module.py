@@ -51,7 +51,8 @@ if str(PROJECT_ROOT) not in sys.path:
 # Import NEXUS perception, target, control, and communication modules
 from raspberry_pi.vision.person_detection import PersonDetection, PersonDetector
 from raspberry_pi.vision.gesture_recognition import GestureDetection, GestureRecognizer
-from locking_target import (
+from raspberry_pi.vision.threaded_camera import ThreadedCamera
+from raspberry_pi.target.locking_target import (
     PersonTracker,
     TargetLockManager,
     TrackedPerson,
@@ -59,8 +60,8 @@ from locking_target import (
     TargetEvent,
     draw_target_overlay
 )
-from follow_controller import FollowController, SteeringCommand
-from esp32_uart import Esp32UartBridge
+from raspberry_pi.control.follow_controller import FollowController, SteeringCommand
+from raspberry_pi.communication.esp32_uart import Esp32UartBridge
 
 
 # =============================================================================
@@ -322,7 +323,11 @@ class TopModule:
         serial_port: Optional[str] = "auto",
         baudrate: int = 115200,
         no_uart: bool = False,
-        deadzone: float = 0.15
+        deadzone: float = 0.15,
+        img_size: int = 640,
+        gesture_interval: int = 4,
+        detect_interval: int = 1,
+        use_threaded_cam: bool = True
     ):
         print("=" * 65)
         print("NEXUS PERSON FOLLOWER ROBOT — TOP MODULE INITIALIZATION")
@@ -335,8 +340,10 @@ class TopModule:
         # 2. Initialize Person Detector (YOLO)
         self.person_detector = PersonDetector(
             model_path=model_path,
-            conf_threshold=conf_threshold
+            conf_threshold=conf_threshold,
+            img_size=img_size
         )
+        self.img_size = self.person_detector.img_size
 
         # 3. Initialize Multi-Person Tracker (IoU-based)
         self.tracker = PersonTracker(max_missed_frames=30, iou_threshold=0.25)
@@ -365,9 +372,16 @@ class TopModule:
             cooldown_seconds=3.0
         )
 
-        # 8. Display preferences
+        # 8. High-speed pipeline preferences
         self.flip_horizontal = flip_horizontal
+        self.gesture_interval = max(1, int(gesture_interval))
+        self.detect_interval = max(1, int(detect_interval))
+        self.use_threaded_cam = use_threaded_cam
+
         print(f"[TopModule] Horizontal Flip (Un-mirror): {'ENABLED' if self.flip_horizontal else 'DISABLED'}")
+        print(f"[TopModule] High-Speed Pipeline -> Resolution: {self.img_size}x{self.img_size} | "
+              f"Gesture Interval: Every {self.gesture_interval} frames | "
+              f"Threaded Cam: {'ENABLED' if self.use_threaded_cam else 'DISABLED'}")
         print("=" * 65)
 
     def run(self, source: str = "0", show: bool = True, save_path: Optional[Path] = None):
@@ -377,31 +391,45 @@ class TopModule:
         is_camera = source.isdigit()
         src_id = int(source) if is_camera else source
 
-        print(f"[TopModule] Opening video source: {source}...")
-        cap = cv2.VideoCapture(src_id)
+        # Initialize Video Source (ThreadedCamera for USB/CSI cameras to eliminate lag)
+        if is_camera and self.use_threaded_cam:
+            print(f"[TopModule] Initializing High-Speed Threaded Camera on source '{source}' (MJPG 640x480 @ 30 FPS)...")
+            cap = ThreadedCamera(source=src_id, width=640, height=480, fps=30).start()
+        else:
+            print(f"[TopModule] Opening standard video source: {source}...")
+            cap = cv2.VideoCapture(src_id)
 
-        if not cap.isOpened():
+        is_opened = cap.is_opened() if hasattr(cap, "is_opened") else cap.isOpened()
+        if not is_opened:
             print(f"[ERROR] Could not open video source '{source}'.")
             return
 
         writer = None
         if save_path:
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            fps_src = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps_src = cap.get(cv2.CAP_PROP_FPS) if hasattr(cap, "get") else 30.0
+            fps_src = fps_src or 30.0
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) if hasattr(cap, "get") else 640
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) if hasattr(cap, "get") else 480
             save_path.parent.mkdir(parents=True, exist_ok=True)
             writer = cv2.VideoWriter(str(save_path), fourcc, fps_src, (w, h))
 
-        print("\n[TopModule] Running. Press 'q' or 'ESC' to exit, 'm' to toggle mirror flip.")
+        print("\n[TopModule] Running (30 FPS Decoupled Pipeline).")
+        print("            Press 'q' or 'ESC' to exit, 'm' to toggle mirror flip.")
         print("            Show Open Palm (🖐️) to Lock onto target and toggle NEXUS ON/OFF.\n")
 
         fps_buffer = []
+        frame_idx = 0
+        last_raw_persons: List[PersonDetection] = []
+        last_gestures: List[GestureDetection] = []
 
         try:
-            while cap.isOpened():
+            while (cap.is_opened() if hasattr(cap, "is_opened") else cap.isOpened()):
                 ret, frame = cap.read()
                 if not ret or frame is None:
+                    if is_camera:
+                        time.sleep(0.005)
+                        continue
                     break
 
                 t_start = time.perf_counter()
@@ -412,14 +440,24 @@ class TopModule:
 
                 frame_h, frame_w = frame.shape[:2]
 
-                # Step 1: Person Detection (YOLO)
-                raw_persons = self.person_detector.detect(frame)
+                # Step 1: Person Detection (YOLO with detect_interval)
+                if frame_idx % self.detect_interval == 0:
+                    raw_persons = self.person_detector.detect(frame)
+                    last_raw_persons = raw_persons
+                else:
+                    raw_persons = last_raw_persons
 
-                # Step 2: Person Tracking (Maintains stable track IDs)
+                # Step 2: Person Tracking (Runs on every frame at full 30 FPS)
                 tracks = self.tracker.update(raw_persons)
 
-                # Step 3: Gesture Recognition (Open Palm 🖐️ with Face Exclusion)
-                gestures = self.gesture_recognizer.detect(frame, persons=raw_persons)
+                # Step 3: Gesture Recognition (Smart Sampling with gesture_interval)
+                if frame_idx % self.gesture_interval == 0:
+                    gestures = self.gesture_recognizer.detect(frame, persons=raw_persons)
+                    last_gestures = gestures
+                else:
+                    gestures = last_gestures
+
+                frame_idx += 1
 
                 # Step 4: Target Lock Update & Loss Timeout Monitoring
                 if self.state_machine.state == NexusState.ON:
@@ -559,7 +597,10 @@ class TopModule:
         except KeyboardInterrupt:
             print("\n[TopModule] KeyboardInterrupt caught.")
         finally:
-            cap.release()
+            if hasattr(cap, "stop"):
+                cap.stop()
+            elif hasattr(cap, "release"):
+                cap.release()
             self.uart_bridge.close()
             if writer:
                 writer.release()
@@ -585,8 +626,24 @@ def main():
         help="Custom YOLO model path (.onnx or .pt). Defaults to models/yolo/exports/nexus_person_detector.onnx"
     )
     parser.add_argument(
+        "--imgsz", type=int, default=640,
+        help="YOLO inference resolution (default 640 for nexus_person_detector.onnx, or 320 for 30 FPS Raspberry Pi speed)"
+    )
+    parser.add_argument(
         "--conf", type=float, default=0.50,
         help="Person detection confidence threshold"
+    )
+    parser.add_argument(
+        "--gesture-interval", type=int, default=4,
+        help="Execute MediaPipe gesture recognition every N frames to save CPU (default 4)"
+    )
+    parser.add_argument(
+        "--detect-interval", type=int, default=1,
+        help="Execute YOLO person detection every N frames (default 1; set 2 for even higher FPS)"
+    )
+    parser.add_argument(
+        "--no-threaded-cam", action="store_true",
+        help="Disable asynchronous threaded camera and use standard blocking VideoCapture"
     )
     parser.add_argument(
         "--loss-timeout", type=float, default=3.0,
@@ -631,7 +688,11 @@ def main():
         serial_port=args.port,
         baudrate=args.baud,
         no_uart=args.no_uart,
-        deadzone=args.deadzone
+        deadzone=args.deadzone,
+        img_size=args.imgsz,
+        gesture_interval=args.gesture_interval,
+        detect_interval=args.detect_interval,
+        use_threaded_cam=not args.no_threaded_cam
     )
 
     save_target = Path(args.save) if args.save else None

@@ -151,10 +151,12 @@ class GestureRecognizer:
         # Built-in OpenCV Haar face detector for accurate face exclusion fallback
         self.face_cascade = None
         try:
-            face_xml = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            cascade = cv2.CascadeClassifier(face_xml)
-            if not cascade.empty():
-                self.face_cascade = cascade
+            if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
+                face_xml = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+                if face_xml.exists():
+                    cascade = cv2.CascadeClassifier(str(face_xml))
+                    if not cascade.empty():
+                        self.face_cascade = cascade
         except Exception:
             self.face_cascade = None
 
