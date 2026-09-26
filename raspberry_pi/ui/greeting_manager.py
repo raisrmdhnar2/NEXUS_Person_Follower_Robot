@@ -60,6 +60,11 @@ class GreetingManager:
         self.total_greetings_played: int = 0
         self.is_greeting_active: bool = False
 
+        # Deactivation Scene-Clear Latch:
+        # After robot deactivates, the screen must become completely empty (0 persons)
+        # before any new visitor startup greeting can ever trigger again!
+        self.require_scene_clear: bool = False
+
     @property
     def time_since_last_greet(self) -> float:
         """Seconds elapsed since the last greeting (inf if never)."""
@@ -78,10 +83,30 @@ class GreetingManager:
         """True if the global greeting cooldown is currently active."""
         return self.cooldown_remaining > 0.0
 
+    def on_deactivation(self) -> None:
+        """
+        Called when robot deactivates (target deactivation, loss timeout, or manual).
+        Locks greeting until the camera screen has completely cleared of people.
+        """
+        self.require_scene_clear = True
+        self.is_greeting_active = False
+        print("[GreetingManager] 🔒 Greeting locked after deactivation. Awaiting camera scene to be clear of people.")
+
+    def mark_interacted(self, track_id: Optional[int] = None) -> None:
+        """
+        Marks an interacted target person (e.g. locked target)
+        to prevent immediate redundant greeting.
+        """
+        if track_id is not None:
+            self.greeted_track_ids.add(track_id)
+        self.last_greet_time = time.time()
+        self.is_greeting_active = False
+
     def evaluate(
         self,
         tracks: List,
-        is_off_state: bool = True
+        is_off_state: bool = True,
+        is_speaking: bool = False
     ) -> Tuple[bool, Optional[int]]:
         """
         Evaluates whether a greeting should be triggered for the current frame.
@@ -90,26 +115,43 @@ class GreetingManager:
             tracks: List of currently tracked persons (e.g. List[TrackedPerson]).
             is_off_state: True if robot is in OFF / STANDBY state. Greetings only
                           trigger when robot is not actively following.
+            is_speaking: True if the speech audio system is currently playing dialogue.
+                         Prevents audio overlap/cutting off active speech.
 
         Returns:
             Tuple of (should_greet: bool, candidate_track_id: Optional[int])
         """
+        # 0. Audio Overlap Guard: Never interrupt an ongoing speech event (e.g. Deactivation dialogue)
+        if is_speaking:
+            return False, None
+
         now = time.time()
 
-        # 1. Update Layer 2: Scene Empty Detection
+        # 1. Update Layer 2: Scene Empty Detection & Deactivation Scene-Clear Latch
         if not tracks:
             if self.empty_start_time is None:
                 self.empty_start_time = now
             else:
                 elapsed_empty = now - self.empty_start_time
-                if elapsed_empty >= self.empty_reset_seconds and self.greeted_track_ids:
-                    # Scene has been empty for >= 5 seconds -> Reset memory for new visitors!
-                    print(f"[GreetingManager] Scene empty for {elapsed_empty:.1f}s -> Resetting greeted IDs.")
-                    self.greeted_track_ids.clear()
+                # If scene has been empty for >= 1.5s:
+                if elapsed_empty >= 1.5:
+                    if self.require_scene_clear:
+                        print(f"[GreetingManager] 🟢 Scene clear confirmed ({elapsed_empty:.1f}s). Greeting re-armed for next visitor!")
+                        self.require_scene_clear = False
+                        self.greeted_track_ids.clear()
+                        self.last_greet_time = 0.0
+                    elif elapsed_empty >= self.empty_reset_seconds and self.greeted_track_ids:
+                        print(f"[GreetingManager] Scene empty for {elapsed_empty:.1f}s -> Resetting greeted IDs.")
+                        self.greeted_track_ids.clear()
             return False, None
 
         # Scene is NOT empty (there are persons present)
         self.empty_start_time = None
+
+        # Deactivation Scene-Clear Guard:
+        # After deactivation, as long as people remain on screen, greeting is strictly BLOCKED!
+        if self.require_scene_clear:
+            return False, None
 
         # 2. Greeting is only permitted while robot is OFF / Standby
         if not is_off_state:
@@ -130,7 +172,7 @@ class GreetingManager:
             # This person was already greeted in the current session!
             return False, None
 
-        # All 3 layers satisfied! Trigger greeting
+        # All layers satisfied! Trigger greeting
         return True, cand_id
 
     def mark_greeted(self, track_id: int) -> None:
@@ -155,3 +197,4 @@ class GreetingManager:
         self.empty_start_time = None
         self.last_greet_time = 0.0
         self.is_greeting_active = False
+        self.require_scene_clear = False

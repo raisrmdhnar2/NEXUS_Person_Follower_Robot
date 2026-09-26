@@ -4,13 +4,15 @@ NEXUS Person Follower Robot — Hand Gesture Recognition Module
 Module Path: raspberry_pi/vision/gesture_recognition.py
 Adheres to:
 - docs/3_software_design/module_specification.md (Section 8: vision/gesture_recognition.py)
-- docs/3_software_design/gesture_password_spesification.md (Password: Open Palm 🖐️)
+- docs/3_software_design/gesture_password_spesification.md (Password: Victory Sign ✌️)
 - docs/3_software_design/interface_spesification.md (Section 5: GestureDetection)
 - docs/3_software_design/configuration_spesification.md (Section 6: Gesture Password)
 
 Responsibility:
     Detect hands in camera frames, track 21 3D landmarks via MediaPipe Hands,
-    and classify whether the hand matches the NEXUS password: OPEN PALM 🖐️.
+    and classify whether the hand matches the NEXUS password: VICTORY SIGN ✌️.
+    Strictly distinguishes Victory Sign from Open Palm (🖐️), Closed Fist (✊),
+    pointing, and natural walking hand postures to prevent false triggers.
     Includes an OpenCV fallback detector if MediaPipe solutions is unavailable.
 
 Input:
@@ -80,12 +82,13 @@ class GestureDetection:
     Matches docs/3_software_design/interface_spesification.md Section 5.
 
     Fields:
-        gesture_type (str): "PASSWORD" (open palm), "OTHER", or "NONE".
+        gesture_type (str): "PASSWORD" (victory sign ✌️), "OTHER", or "NONE".
         confidence (float): Hand recognition confidence score in [0.0, 1.0].
         hand_bbox (tuple[int, int, int, int]): (x1, y1, x2, y2) in pixel coordinates.
         hand_center (tuple[float, float]): Hand centroid (xc, yc) in pixel coordinates.
-        is_open_palm (bool): True if 5 fingers are extended and palm faces camera.
-        handedness (str): "Left" or "Right".
+        is_open_palm (bool): Set True if password gesture verified (retained for backward compatibility).
+        handedness (str): "Left", "Right", or descriptive label (e.g. "Victory Sign ✌️").
+        is_victory (bool): True if ✌️ Victory Sign is verified (Index & Middle extended, Ring & Pinky curled).
     """
     gesture_type: str
     confidence: float
@@ -93,6 +96,7 @@ class GestureDetection:
     hand_center: Tuple[float, float]
     is_open_palm: bool
     handedness: str = "Unknown"
+    is_victory: bool = False
 
     @property
     def x1(self) -> int:
@@ -281,7 +285,8 @@ class GestureRecognizer:
                 hand_bbox=full_bbox,
                 hand_center=full_center,
                 is_open_palm=g.is_open_palm,
-                handedness=g.handedness
+                handedness=g.handedness,
+                is_victory=getattr(g, 'is_victory', False)
             ))
 
         return translated_gestures
@@ -290,7 +295,8 @@ class GestureRecognizer:
         """
         MediaPipe Tasks Gesture Recognizer (Pendekatan A).
         Analyzes 21 3D landmarks and deep neural network gesture classifications.
-        Strictly distinguishes Open Palm (🖐️) from Closed Fist (✊) or other hand shapes.
+        Strictly distinguishes Victory Sign (✌️) from Open Palm (🖐️), Closed Fist (✊),
+        or natural walking hand movements.
         """
         h, w = frame.shape[:2]
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -329,48 +335,86 @@ class GestureRecognizer:
 
             # Landmark-level finger extension check
             wrist = hand_lms[0]
-            extended_count = 0
-            # Check 4 fingers: Index, Middle, Ring, Pinky
-            for tip_i, pip_i in [(8, 6), (12, 10), (16, 14), (20, 18)]:
-                tip = hand_lms[tip_i]
-                pip = hand_lms[pip_i]
-                d_tip = math.hypot(tip.x - wrist.x, tip.y - wrist.y)
-                d_pip = math.hypot(pip.x - wrist.x, pip.y - wrist.y)
-                if d_tip > d_pip and tip.y < pip.y:
-                    extended_count += 1
 
-            # Check thumb
-            thumb_tip = hand_lms[4]
-            thumb_mcp = hand_lms[2]
-            d_thumb = math.hypot(thumb_tip.x - wrist.x, thumb_tip.y - wrist.y)
-            d_mcp = math.hypot(thumb_mcp.x - wrist.x, thumb_mcp.y - wrist.y)
-            if d_thumb > d_mcp * 1.10:
-                extended_count += 1
+            # 1. Index (Tip 8, PIP 6)
+            tip8 = hand_lms[8]
+            pip6 = hand_lms[6]
+            d_index_tip = math.hypot(tip8.x - wrist.x, tip8.y - wrist.y)
+            d_index_pip = math.hypot(pip6.x - wrist.x, pip6.y - wrist.y)
+            index_extended = (d_index_tip > d_index_pip * 1.10) and (tip8.y < pip6.y)
 
-            # Strict Distinction: Open Palm (🖐️) vs Closed Fist (✊)
-            # A valid password requires:
-            # 1. Category is 'Open_Palm' OR at least 4 fingers are clearly extended
-            # 2. MUST NOT be 'Closed_Fist'
-            # 3. MUST have at least 3 extended fingers
-            is_open_palm = (
-                (top_category == "Open_Palm" or extended_count >= 4)
-                and top_category != "Closed_Fist"
-                and extended_count >= 3
+            # 2. Middle (Tip 12, PIP 10)
+            tip12 = hand_lms[12]
+            pip10 = hand_lms[10]
+            d_mid_tip = math.hypot(tip12.x - wrist.x, tip12.y - wrist.y)
+            d_mid_pip = math.hypot(pip10.x - wrist.x, pip10.y - wrist.y)
+            middle_extended = (d_mid_tip > d_mid_pip * 1.10) and (tip12.y < pip10.y)
+
+            # 3. Ring (Tip 16, PIP 14)
+            tip16 = hand_lms[16]
+            pip14 = hand_lms[14]
+            d_ring_tip = math.hypot(tip16.x - wrist.x, tip16.y - wrist.y)
+            d_ring_pip = math.hypot(pip14.x - wrist.x, pip14.y - wrist.y)
+            ring_extended = (d_ring_tip > d_ring_pip * 1.15) and (tip16.y < pip14.y)
+
+            # 4. Pinky (Tip 20, PIP 18)
+            tip20 = hand_lms[20]
+            pip18 = hand_lms[18]
+            d_pky_tip = math.hypot(tip20.x - wrist.x, tip20.y - wrist.y)
+            d_pky_pip = math.hypot(pip18.x - wrist.x, pip18.y - wrist.y)
+            pinky_extended = (d_pky_tip > d_pky_pip * 1.15) and (tip20.y < pip18.y)
+
+            # 5. Thumb (Tip 4, MCP 2)
+            tip4 = hand_lms[4]
+            mcp2 = hand_lms[2]
+            d_thumb_tip = math.hypot(tip4.x - wrist.x, tip4.y - wrist.y)
+            d_thumb_mcp = math.hypot(mcp2.x - wrist.x, mcp2.y - wrist.y)
+            thumb_extended = d_thumb_tip > d_thumb_mcp * 1.15
+
+            extended_count = sum([index_extended, middle_extended, ring_extended, pinky_extended, thumb_extended])
+
+            # =========================================================================
+            # Strict VICTORY SIGN (✌️) Criteria:
+            # 1. MediaPipe model predicted 'Victory' OR landmarks strictly form 'V'
+            # 2. Index and Middle MUST be extended
+            # 3. Ring and Pinky MUST be folded / curled (NOT extended)
+            # 4. Strictly EXCLUDE 'Open_Palm', 'Closed_Fist', 'Thumb_Up', 'Thumb_Down'
+            # 5. Extended fingers must be 2 (or 3 if thumb is counted)
+            # =========================================================================
+            landmark_victory = (
+                index_extended and
+                middle_extended and
+                (not ring_extended) and
+                (not pinky_extended) and
+                extended_count in [2, 3]
             )
 
-            confidence = max(top_score, extended_count / 5.0)
+            is_victory = False
+            if top_category == "Victory":
+                if not ring_extended and not pinky_extended:
+                    is_victory = True
+            elif landmark_victory and top_category not in ["Closed_Fist", "Open_Palm", "Thumb_Up", "Thumb_Down"]:
+                is_victory = True
 
-            # Determine UI label
-            if is_open_palm:
-                display_label = "Open Palm 🖐️"
+            # Determine UI label and classification
+            if is_victory:
+                confidence = max(top_score, 0.85) if top_category == "Victory" else 0.80
+                display_label = "Victory Sign ✌️"
                 gesture_type = "PASSWORD"
+            elif top_category == "Open_Palm" or (extended_count >= 4):
+                confidence = max(top_score, 0.70)
+                display_label = "Open Palm 🖐️"
+                gesture_type = "OTHER"
             elif top_category == "Closed_Fist" or extended_count <= 1:
+                confidence = max(top_score, 0.70)
                 display_label = "Closed Fist ✊"
                 gesture_type = "OTHER"
             elif top_category != "None":
+                confidence = max(top_score, 0.50)
                 display_label = f"{top_category} ({extended_count} fingers)"
                 gesture_type = "OTHER"
             else:
+                confidence = 0.40
                 display_label = f"Hand ({extended_count} fingers)"
                 gesture_type = "OTHER"
 
@@ -379,8 +423,9 @@ class GestureRecognizer:
                 confidence=confidence,
                 hand_bbox=(x1, y1, x2, y2),
                 hand_center=(cx, cy),
-                is_open_palm=is_open_palm,
-                handedness=display_label
+                is_open_palm=is_victory,  # Set True if victory for backward compatibility
+                handedness=display_label,
+                is_victory=is_victory
             ))
 
         return detections
@@ -415,55 +460,57 @@ class GestureRecognizer:
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
 
-            is_open_palm, conf = self._is_open_palm_mediapipe(hand_lms.landmark)
-            gesture_type = "PASSWORD" if is_open_palm else "OTHER"
+            is_victory, conf = self._is_victory_mediapipe(hand_lms.landmark)
+            gesture_type = "PASSWORD" if is_victory else "OTHER"
+            display_label = "Victory Sign ✌️" if is_victory else f"Hand ({h_label})"
 
             detections.append(GestureDetection(
                 gesture_type=gesture_type,
                 confidence=conf,
                 hand_bbox=(x1, y1, x2, y2),
                 hand_center=(cx, cy),
-                is_open_palm=is_open_palm,
-                handedness=h_label
+                is_open_palm=is_victory,
+                handedness=display_label,
+                is_victory=is_victory
             ))
 
         return detections
 
-    def _is_open_palm_mediapipe(self, landmarks) -> Tuple[bool, float]:
-        """Evaluates MediaPipe landmarks: confirms 5 extended fingers."""
+    def _is_victory_mediapipe(self, landmarks) -> Tuple[bool, float]:
+        """Evaluates MediaPipe landmarks: confirms Victory Sign ✌️ (Index & Middle extended, Ring & Pinky folded)."""
         wrist = landmarks[0]
-        extended_fingers = 0
 
-        finger_joints = [
-            (8, 6),    # Index
-            (12, 10),  # Middle
-            (16, 14),  # Ring
-            (20, 18),  # Pinky
-        ]
+        # 1. Index finger (8, 6)
+        tip8, pip6 = landmarks[8], landmarks[6]
+        d_idx_tip = math.hypot(tip8.x - wrist.x, tip8.y - wrist.y)
+        d_idx_pip = math.hypot(pip6.x - wrist.x, pip6.y - wrist.y)
+        idx_ext = (d_idx_tip > d_idx_pip * 1.10) and (tip8.y < pip6.y)
 
-        for tip_idx, pip_idx in finger_joints:
-            tip = landmarks[tip_idx]
-            pip = landmarks[pip_idx]
+        # 2. Middle finger (12, 10)
+        tip12, pip10 = landmarks[12], landmarks[10]
+        d_mid_tip = math.hypot(tip12.x - wrist.x, tip12.y - wrist.y)
+        d_mid_pip = math.hypot(pip10.x - wrist.x, pip10.y - wrist.y)
+        mid_ext = (d_mid_tip > d_mid_pip * 1.10) and (tip12.y < pip10.y)
 
-            dist_tip_wrist = math.hypot(tip.x - wrist.x, tip.y - wrist.y)
-            dist_pip_wrist = math.hypot(pip.x - wrist.x, pip.y - wrist.y)
+        # 3. Ring finger (16, 14)
+        tip16, pip14 = landmarks[16], landmarks[14]
+        d_rng_tip = math.hypot(tip16.x - wrist.x, tip16.y - wrist.y)
+        d_rng_pip = math.hypot(pip14.x - wrist.x, pip14.y - wrist.y)
+        rng_ext = (d_rng_tip > d_rng_pip * 1.15) and (tip16.y < pip14.y)
 
-            if dist_tip_wrist > dist_pip_wrist and tip.y < pip.y:
-                extended_fingers += 1
+        # 4. Pinky finger (20, 18)
+        tip20, pip18 = landmarks[20], landmarks[18]
+        d_pky_tip = math.hypot(tip20.x - wrist.x, tip20.y - wrist.y)
+        d_pky_pip = math.hypot(pip18.x - wrist.x, pip18.y - wrist.y)
+        pky_ext = (d_pky_tip > d_pky_pip * 1.15) and (tip20.y < pip18.y)
 
-        thumb_tip = landmarks[4]
-        thumb_mcp = landmarks[2]
-        pinky_mcp = landmarks[17]
+        is_victory = idx_ext and mid_ext and (not rng_ext) and (not pky_ext)
+        confidence = 0.90 if is_victory else 0.40
+        return is_victory, confidence
 
-        dist_thumb_pinky = math.hypot(thumb_tip.x - pinky_mcp.x, thumb_tip.y - pinky_mcp.y)
-        dist_mcp_pinky = math.hypot(thumb_mcp.x - pinky_mcp.x, thumb_mcp.y - pinky_mcp.y)
-
-        if dist_thumb_pinky > dist_mcp_pinky * 1.15:
-            extended_fingers += 1
-
-        is_open = (extended_fingers == 5)
-        confidence = extended_fingers / 5.0
-        return is_open, confidence
+    def _is_open_palm_mediapipe(self, landmarks) -> Tuple[bool, float]:
+        """Legacy helper retained for compatibility."""
+        return self._is_victory_mediapipe(landmarks)
 
     def _detect_palm_opencv(self, frame: np.ndarray, persons: Optional[List] = None) -> List[GestureDetection]:
         """
@@ -591,31 +638,34 @@ class GestureRecognizer:
                                         if b * c > 0:
                                             cos_val = max(-1.0, min(1.0, (b**2 + c**2 - a**2) / (2 * b * c)))
                                             angle = math.acos(cos_val)
-                                            if angle <= math.radians(115):
+                                            # V-sign angle between index and middle is typically 15 to 80 degrees
+                                            if math.radians(15) <= angle <= math.radians(85):
                                                 current_valleys += 1
                                 finger_valleys = max(finger_valleys, current_valleys)
-                                if finger_valleys >= 2:
+                                if finger_valleys >= 1:
                                     break
                     except Exception:
                         pass
 
-            # 5. Open Palm condition:
-            # An open palm with 5 fingers spread produces 2 to 4 valleys and lower solidity (< 0.88)
-            # Or low solidity (< 0.78) with at least 1 valley, or deep finger gaps (< 0.72)
-            is_open = (
-                (finger_valleys >= 2 and solidity < 0.88) or
-                (finger_valleys >= 1 and solidity < 0.80) or
-                (solidity < 0.72)
+            # 5. Victory Sign condition for OpenCV fallback:
+            # - In Victory sign (✌️), 2 fingers extend upward, creating 1 prominent valley
+            # - Aspect ratio H > W (bw / bh <= 0.90)
+            # - Solidity: 0.55 <= solidity <= 0.88 (more compact than open palm)
+            is_victory = (
+                (finger_valleys in [1, 2]) and
+                (0.55 <= solidity <= 0.88) and
+                (aspect_ratio <= 0.90)
             )
-            confidence = min(0.98, max(0.65, 0.55 + finger_valleys * 0.12)) if is_open else 0.45
+            confidence = min(0.95, max(0.65, 0.60 + finger_valleys * 0.15)) if is_victory else 0.40
 
             detections.append(GestureDetection(
-                gesture_type="PASSWORD" if is_open else "OTHER",
+                gesture_type="PASSWORD" if is_victory else "OTHER",
                 confidence=confidence,
                 hand_bbox=(x, y, x + bw, y + bh),
                 hand_center=(cx, cy),
-                is_open_palm=is_open,
-                handedness="Open Palm 🖐️" if is_open else "Hand"
+                is_open_palm=is_victory,
+                handedness="Victory Sign ✌️" if is_victory else "Hand",
+                is_victory=is_victory
             ))
 
         return detections
@@ -630,13 +680,13 @@ class GestureRecognizer:
             bool: True if a state transition event should be triggered.
         """
         now = time.time()
-        has_open_palm = any(d.is_open_palm for d in detections)
+        has_password = any(getattr(d, "is_victory", False) or d.is_open_palm for d in detections)
 
         if (now - self._last_trigger_time) < self.cooldown_seconds:
             self._consecutive_password_frames = 0
             return False
 
-        if has_open_palm:
+        if has_password:
             self._consecutive_password_frames += 1
             if self._consecutive_password_frames >= self.required_consecutive_frames:
                 self._last_trigger_time = now

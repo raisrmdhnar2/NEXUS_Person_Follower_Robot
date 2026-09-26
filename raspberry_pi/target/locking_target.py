@@ -191,7 +191,7 @@ class PersonTracker:
 
     def __init__(
         self,
-        max_missed_frames: int = 30,
+        max_missed_frames: int = 150,
         iou_threshold: float = 0.25
     ):
         """
@@ -307,7 +307,7 @@ class TargetLockManager:
 
     def __init__(
         self,
-        loss_timeout_seconds: float = 3.0,
+        loss_timeout_seconds: float = 4.0,
         hand_reach_x_margin: float = 0.40,
         hand_reach_y_margin: float = 0.20
     ):
@@ -439,10 +439,74 @@ class TargetLockManager:
         now = time.time()
         matched_person: Optional[TrackedPerson] = None
 
+        # 1. Direct ID match
         for track in tracks:
             if track.track_id == self.locked_target_id:
                 matched_person = track
                 break
+
+        # 2. Seamless Track ID Transition (when status == LOCKED but track ID changed):
+        # If person is still in frame and tracker assigned a new ID, maintain lock without entering LOST!
+        if matched_person is None and self.status == TargetStatus.LOCKED and tracks:
+            if len(tracks) == 1:
+                matched_person = tracks[0]
+                prev_id = self.locked_target_id
+                self.locked_target_id = matched_person.track_id
+                print(f"\n[TargetLockManager] 🔄 TARGET ID RE-ASSOCIATED (Single Person) -> New ID: #{matched_person.track_id} (Previous: #{prev_id})")
+            elif self.locked_person is not None:
+                # Find track with highest IoU / closest distance
+                last_bbox = self.locked_person.bbox
+                best_track = None
+                best_iou = 0.0
+                for track in tracks:
+                    iou = calculate_iou(last_bbox, track.bbox)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_track = track
+                if best_track is not None and best_iou >= 0.15:
+                    matched_person = best_track
+                    prev_id = self.locked_target_id
+                    self.locked_target_id = matched_person.track_id
+                    print(f"\n[TargetLockManager] 🔄 TARGET ID RE-ASSOCIATED (IoU {best_iou:.2f}) -> New ID: #{matched_person.track_id} (Previous: #{prev_id})")
+
+        # 3. Spatial Re-acquisition during LOST state:
+        # If target was temporarily lost (<5.0s) and detections reappear,
+        # re-acquire the target even if tracker assigned a new track ID!
+        if matched_person is None and self.status == TargetStatus.LOST and tracks:
+            if len(tracks) == 1:
+                # Exactly 1 person in front of the robot -> re-acquire as target
+                matched_person = tracks[0]
+                prev_id = self.locked_target_id
+                self.locked_target_id = matched_person.track_id
+                print(f"\n[TargetLockManager] 🔄 TARGET REACQUIRED (Single Person) -> New ID: #{matched_person.track_id} (Previous: #{prev_id})")
+            elif self.locked_person is not None:
+                # Multiple persons -> match closest to last known bounding box/position
+                last_bbox = self.locked_person.bbox
+                last_cx = (last_bbox[0] + last_bbox[2]) / 2.0
+                last_cy = (last_bbox[1] + last_bbox[3]) / 2.0
+                best_track = None
+                best_score = -float("inf")
+                for track in tracks:
+                    iou = calculate_iou(last_bbox, track.bbox)
+                    tcx = (track.bbox[0] + track.bbox[2]) / 2.0
+                    tcy = (track.bbox[1] + track.bbox[3]) / 2.0
+                    dist = np.hypot(tcx - last_cx, tcy - last_cy)
+                    score = (iou * 1000.0) - dist
+                    if score > best_score:
+                        best_score = score
+                        best_track = track
+                if best_track is not None:
+                    matched_person = best_track
+                    prev_id = self.locked_target_id
+                    self.locked_target_id = matched_person.track_id
+                    print(f"\n[TargetLockManager] 🔄 TARGET REACQUIRED (Spatial Proximity) -> New ID: #{matched_person.track_id} (Previous: #{prev_id})")
+            else:
+                # Multiple persons and locked_person was None -> pick largest/closest track
+                tracks_sorted = sorted(tracks, key=lambda t: (t.bbox[2]-t.bbox[0])*(t.bbox[3]-t.bbox[1]), reverse=True)
+                matched_person = tracks_sorted[0]
+                prev_id = self.locked_target_id
+                self.locked_target_id = matched_person.track_id
+                print(f"\n[TargetLockManager] 🔄 TARGET REACQUIRED (Prominent Person) -> New ID: #{matched_person.track_id} (Previous: #{prev_id})")
 
         if matched_person is not None:
             # Target is visible!
@@ -514,9 +578,15 @@ class FastVisualTracker:
         if frame is None or frame.size == 0 or bbox is None:
             return False
 
+        fh, fw = frame.shape[:2]
         x1, y1, x2, y2 = [int(v) for v in bbox]
-        w = max(10, x2 - x1)
-        h = max(10, y2 - y1)
+        # Clamp strictly within image boundaries to prevent OpenCV ROI crashes
+        x1 = max(0, min(fw - 15, x1))
+        y1 = max(0, min(fh - 15, y1))
+        x2 = max(x1 + 10, min(fw, x2))
+        y2 = max(y1 + 10, min(fh, y2))
+        w = x2 - x1
+        h = y2 - y1
         rect = (x1, y1, w, h)
 
         try:
@@ -680,7 +750,7 @@ def main():
     gesture_rec = GestureRecognizer()
     manager = TargetLockManager(loss_timeout_seconds=args.loss_timeout)
 
-    print("\n[Target Demo] Running. Show Open Palm 🖐️ to lock/unlock target.")
+    print("\n[Target Demo] Running. Show Victory Sign ✌️ to lock/unlock target.")
     print("              Press 'q' to quit, 'u' to unlock target manually.\n")
 
     try:
@@ -699,7 +769,7 @@ def main():
                 print("\n[Target Demo] 🚨 Target Lost Timeout reached! Lock cleared.")
 
             if gesture_rec.check_password_event(gestures):
-                pwd_g = next((g for g in gestures if g.is_open_palm), None)
+                pwd_g = next((g for g in gestures if (getattr(g, "is_victory", False) or g.is_open_palm)), None)
                 if pwd_g:
                     cand = manager.associate_gesture_with_person(tracks, pwd_g)
                     if not manager.is_locked:

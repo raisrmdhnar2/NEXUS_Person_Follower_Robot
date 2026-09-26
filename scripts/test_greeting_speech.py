@@ -143,23 +143,118 @@ def test_anti_spam_logic():
     print("=" * 65)
 
 
+def test_deactivation_scene_clear():
+    print("=" * 65)
+    print("NEXUS GREETING MANAGER — DEACTIVATION SCENE CLEAR TEST")
+    print("=" * 65)
+
+    gm = GreetingManager(cooldown_seconds=15.0, empty_reset_seconds=5.0)
+
+    # 1. Simulate deactivation
+    gm.on_deactivation()
+    assert gm.require_scene_clear, "require_scene_clear must be True on deactivation"
+    print("✓ Step 1: Deactivation latch activated (require_scene_clear = True).")
+
+    # 2. Person remains in front of robot -> MUST BE BLOCKED
+    tracks = [MockTrack(track_id=1)]
+    should, _ = gm.evaluate(tracks=tracks, is_off_state=True, is_speaking=False)
+    assert not should, "Greeting must be BLOCKED while scene is not cleared after deactivation"
+    print("✓ Step 2: Person still in frame -> Greeting strictly BLOCKED.")
+
+    # 3. Audio speaking active -> MUST BE BLOCKED
+    should, _ = gm.evaluate(tracks=tracks, is_off_state=True, is_speaking=True)
+    assert not should, "Greeting must be BLOCKED while audio is speaking"
+    print("✓ Step 3: Audio speaking active -> Greeting BLOCKED.")
+
+    # 4. Scene clear for 0.8s (<1.5s) -> Still not reset
+    gm.evaluate(tracks=[], is_off_state=True)
+    time.sleep(0.8)
+    gm.evaluate(tracks=[], is_off_state=True)
+    assert gm.require_scene_clear, "Scene clear < 1.5s must NOT reset latch"
+    print("✓ Step 4: Scene clear < 1.5s -> Latch maintained.")
+
+    # 5. Scene clear for > 1.5s -> Reset latch!
+    time.sleep(0.8)  # total 1.6s empty
+    gm.evaluate(tracks=[], is_off_state=True)
+    assert not gm.require_scene_clear, "Scene clear >= 1.5s must reset latch"
+    print("✓ Step 5: Scene clear >= 1.5s -> Latch reset (ready for new visitor)!")
+
+    # 6. New visitor enters -> Greeting triggers!
+    should, cand = gm.evaluate(tracks=[MockTrack(track_id=2)], is_off_state=True)
+    assert should and cand == 2, "New visitor must trigger greeting after scene cleared"
+    print("✓ Step 6: New visitor enters -> Greeting successfully TRIGGERED.")
+
+    print("\n" + "=" * 65)
+    print("Deactivation Scene Clear Test PASSED!")
+    print("=" * 65)
+
+
+def test_target_recovery():
+    print("=" * 65)
+    print("NEXUS TARGET LOCK MANAGER — RE-ACQUISITION TEST")
+    print("=" * 65)
+
+    from raspberry_pi.target.locking_target import TargetLockManager, PersonDetection, TargetStatus, TargetEvent
+
+    target_mgr = TargetLockManager(loss_timeout_seconds=4.0)
+
+    # 1. Lock onto person #1
+    p1 = MockTrack(track_id=1)
+    target_mgr.lock_target(1, p1)
+    assert target_mgr.status == TargetStatus.LOCKED
+    print("✓ Step 1: Target #1 locked.")
+
+    # 2. Target lost (person disappears)
+    _, ev = target_mgr.update(tracks=[])
+    assert ev == TargetEvent.TARGET_LOST
+    assert target_mgr.status == TargetStatus.LOST
+    print("✓ Step 2: Target lost event emitted, status set to LOST.")
+
+    # 3. Simulate missing for 1.5s (<4.0s)
+    for _ in range(5):
+        _, ev = target_mgr.update(tracks=[])
+        assert ev == TargetEvent.NONE
+        assert target_mgr.status == TargetStatus.LOST
+    print("✓ Step 3: Target continues in LOST state during grace period.")
+
+    # 4. Target returns before 4.0s timeout with new track ID #2
+    p2 = MockTrack(track_id=2)
+    _, ev = target_mgr.update(tracks=[p2])
+    assert ev == TargetEvent.TARGET_REACQUIRED, f"Expected TARGET_REACQUIRED, got {ev}"
+    assert target_mgr.status == TargetStatus.LOCKED
+    assert target_mgr.locked_target_id == 2
+    print(f"✓ Step 4: Target REACQUIRED as ID #{target_mgr.locked_target_id} before timeout!")
+
+    print("\n" + "=" * 65)
+    print("Target Recovery Test PASSED!")
+    print("=" * 65)
+
+
 def main():
     parser = argparse.ArgumentParser(description="NEXUS Greeting & Speech Subsystem Test")
     parser.add_argument("--test-speech", action="store_true", help="Test all 8 voice events playback")
     parser.add_argument("--event", type=str, default=None, help="Test a specific voice event")
     parser.add_argument("--test-anti-spam", action="store_true", help="Run 3-layer anti-spam unit test")
+    parser.add_argument("--test-deactivation-clear", action="store_true", help="Run deactivation scene-clear unit test")
+    parser.add_argument("--test-recovery", action="store_true", help="Run target recovery / reacquisition unit test")
 
     args = parser.parse_args()
 
     if args.test_anti_spam:
         test_anti_spam_logic()
+    elif args.test_deactivation_clear:
+        test_deactivation_scene_clear()
+    elif args.test_recovery:
+        test_target_recovery()
     elif args.event:
         test_speech_playback(args.event)
     else:
-        # Default: run both anti-spam logic test and speech test
+        # Default: run logic tests
         test_anti_spam_logic()
         print("\n")
-        test_speech_playback("startup_greeting")
+        test_deactivation_scene_clear()
+        print("\n")
+        test_target_recovery()
 
 
 if __name__ == "__main__":

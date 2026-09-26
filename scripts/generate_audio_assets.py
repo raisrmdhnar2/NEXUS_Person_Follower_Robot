@@ -101,7 +101,25 @@ def generate_all_assets():
                 cmd = [edge_tts_bin, "--voice", "en-GB-RyanNeural", "--text", text, "--write-media", str(out_file)]
                 res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 if res.returncode == 0 and out_file.exists() and out_file.stat().st_size > 500:
-                    print(f"  [✓] {fname:<28} -> Edge-TTS Neural Voice generated.")
+                    # Edge-TTS outputs MP3 byte stream regardless of .wav extension.
+                    # Convert to genuine 16-bit PCM RIFF WAV using GStreamer if available:
+                    gst_bin = shutil.which("gst-launch-1.0")
+                    if gst_bin:
+                        tmp_wav = out_file.with_suffix(".tmp.wav")
+                        conv_cmd = [
+                            gst_bin, "-q",
+                            "filesrc", f"location={out_file}",
+                            "!", "decodebin",
+                            "!", "audioconvert",
+                            "!", "audioresample",
+                            "!", "wavenc",
+                            "!", "filesink", f"location={tmp_wav}"
+                        ]
+                        conv_res = subprocess.run(conv_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        if conv_res.returncode == 0 and tmp_wav.exists() and tmp_wav.stat().st_size > 1000:
+                            tmp_wav.replace(out_file)
+
+                    print(f"  [✓] {fname:<28} -> Edge-TTS Neural Voice generated (PCM WAV).")
                     success = True
             except Exception:
                 pass

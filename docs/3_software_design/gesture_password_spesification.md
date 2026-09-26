@@ -9,23 +9,27 @@ This document defines the hand gesture used as the password for activating and d
 
 ## 2. Password Gesture
 
-The NEXUS password is an **open-palm hand gesture**:
+The official NEXUS password is the **Victory / Peace Sign hand gesture**:
 
-> 🖐🏻
+> ✌️
 
 The gesture consists of:
 
-* One hand
-* Palm facing the camera
-* Five fingers extended
-* Fingers visibly separated or sufficiently distinguishable
-* Hand visible within the camera frame
+* One hand raised facing the camera
+* **Index** and **Middle** fingers extended upward in a 'V' shape
+* **Ring** and **Pinky** fingers folded / curled down
+* Thumb tucked across ring finger or resting inward
+* Hand clearly visible within the camera frame
+
+> [!NOTE]
+> **Mengapa Mengganti Telapak Tangan Terbuka (🖐️) ke Victory Sign (✌️)?**
+> Gestur telapak tangan terbuka (*Open Palm*) sering mengalami *bias / false positive* karena orang secara alami sering membuka telapak tangan saat berjalan santai, membawa barang, atau sekadar mengayunkan tangan. Gestur **Victory Sign (✌️)** memerlukan tindakan sengaja (*deliberate action*), didukung secara native oleh MediaPipe Tasks Classifier (`Victory`), serta mudah diverifikasi melalui 21 titik koordinat 3D (*landmark*).
 
 ---
 
 ## 3. Gesture Recognition
 
-The gesture recognition system shall determine whether the detected hand matches the open-palm password.
+The gesture recognition system shall determine whether the detected hand matches the Victory Sign password.
 
 Conceptually:
 
@@ -34,18 +38,17 @@ Camera Frame
      ↓
 Hand Detection
      ↓
-Hand Landmark Extraction
+21 3D Hand Landmark Extraction
      ↓
-Gesture Classification
+Gesture Classification (MediaPipe Tasks 'Victory' / Landmark V-Rule)
      ↓
-OPEN PALM?
-   ├── YES → Valid Password
-   └── NO  → Invalid Gesture
+VICTORY SIGN (✌️)?
+   ├── YES (Index & Mid Extended, Ring & Pinky Folded) → Valid Password
+   └── NO  (Open Palm 🖐️, Fist ✊, Pointing, etc.)   → Ignored
 ```
 
-A confidence threshold shall be used to reduce false detections.
-
-The gesture should be confirmed across multiple consecutive frames rather than accepting a single-frame detection.
+A confidence threshold is used to prevent false detections.
+The gesture is confirmed across multiple consecutive frames (2 frames) and protected by a 3.0-second cooldown period.
 
 ---
 
@@ -54,7 +57,7 @@ The gesture should be confirmed across multiple consecutive frames rather than a
 The password must be associated with a tracked person.
 
 ```text
-Open Palm
+Victory Sign ✌️
     ↓
 Identify Hand
     ↓
@@ -71,12 +74,12 @@ The gesture alone is not sufficient; the system must determine **which tracked p
 
 ## 5. Activation Rule
 
-When NEXUS is in `OFF`:
+When NEXUS is in `OFF` or `GREETING`:
 
 ```text
-Valid Open Palm
+Valid Victory Sign ✌️
       ↓
-Identify Person
+Identify Person Candidate
       ↓
 Authentication SUCCESS
       ↓
@@ -93,14 +96,14 @@ The person who performs the valid password becomes the target.
 
 ## 6. Deactivation Rule
 
-When NEXUS is in `FOLLOW`:
+When NEXUS is in `FOLLOW` (`ON`):
 
 ```text
-Valid Open Palm
+Valid Victory Sign ✌️
       ↓
 Identify Person
       ↓
-Compare with target_id
+Compare with locked target_id
       │
       ├── Same person → Deactivate
       │
@@ -113,15 +116,17 @@ Only the currently locked target can deactivate NEXUS.
 
 ## 7. False Trigger Prevention
 
-The implementation should include:
+The implementation includes:
 
-* Minimum gesture confidence
-* Multi-frame confirmation
-* Gesture detection cooldown
+* Dual-layer gesture verification (MediaPipe Deep Classifier + Strict 21-Landmark checks)
+* Ring & Pinky curled confirmation (instantly rejects Open Palm 🖐️)
+* Face & upper-body exclusion zones (prevents face contours being mistaken for hands)
+* Multi-frame confirmation (2 consecutive frames)
+* Gesture detection cooldown (3.0 seconds)
 * Hand-person association validation
 * Rejection of ambiguous hand detections
 
-A single accidental open-palm detection should not immediately trigger repeated activation or deactivation events.
+A single accidental hand motion or waving gesture will not trigger activation or deactivation events.
 
 ---
 
@@ -129,15 +134,16 @@ A single accidental open-palm detection should not immediately trigger repeated 
 
 | Parameter          | Specification                                    |
 | ------------------ | ------------------------------------------------ |
-| Gesture            | 🖐🏻 Open palm                                   |
+| Gesture            | ✌️ Victory / Peace Sign                         |
 | Hand count         | One                                              |
 | Palm orientation   | Facing camera                                    |
-| Fingers            | Five extended                                    |
-| Recognition        | Multi-frame confirmation                         |
-| Activation         | Valid gesture while`OFF`                       |
-| Deactivation       | Valid gesture from`target_id` while `FOLLOW` |
-| Other person       | Gesture ignored during`FOLLOW`                 |
-| Recognition output | Valid/invalid + associated`track_id`           |
+| Extended fingers   | Index & Middle extended, Ring & Pinky folded     |
+| Recognition model  | MediaPipe Tasks AI (`Victory`) + 21 Landmark V-Rule |
+| Recognition        | Multi-frame confirmation (2 frames)              |
+| Activation         | Valid gesture while `OFF` / `GREETING`           |
+| Deactivation       | Valid gesture from `target_id` while `FOLLOW`    |
+| Other person       | Gesture ignored during `FOLLOW`                  |
+| Recognition output | Valid/invalid + associated `track_id`            |
 
 ---
 
@@ -146,7 +152,7 @@ A single accidental open-palm detection should not immediately trigger repeated 
 The password system follows:
 
 ```text
-OPEN PALM
+VICTORY SIGN ✌️
     ↓
 GESTURE RECOGNITION
     ↓

@@ -38,7 +38,7 @@ import sys
 import time
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -65,6 +65,7 @@ from raspberry_pi.control.follow_controller import FollowController, SteeringCom
 from raspberry_pi.communication.esp32_uart import Esp32UartBridge
 from raspberry_pi.ui.speech_manager import SpeechManager, VoiceEvent
 from raspberry_pi.ui.greeting_manager import GreetingManager
+from raspberry_pi.ui.face_display import FaceDisplayManager, DisplayMode, FaceExpression
 
 
 # =============================================================================
@@ -196,12 +197,12 @@ def draw_top_module_hud(
     # -------------------------------------------------------------------------
     for g in gestures:
         hx1, hy1, hx2, hy2 = g.hand_bbox
-        is_pwd = g.is_open_palm
+        is_pwd = getattr(g, "is_victory", False) or g.is_open_palm
         box_color = (0, 215, 255) if is_pwd else (255, 140, 0)  # Gold if Password, else Blue
 
         cv2.rectangle(canvas, (hx1, hy1), (hx2, hy2), box_color, 2)
 
-        label = "🖐️ PASSWORD (Open Palm)" if is_pwd else f"Hand ({g.handedness})"
+        label = "✌️ PASSWORD (Victory)" if is_pwd else f"Hand ({g.handedness})"
         (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
         ty1 = max(0, hy1 - th - bl - 4)
         cv2.rectangle(canvas, (hx1, ty1), (hx1 + tw + 6, hy1), box_color, -1)
@@ -233,18 +234,18 @@ def draw_top_module_hud(
             if cooldown_remaining > 0.0:
                 sub_text = f"Following Active | Cooldown: {cooldown_remaining:3.1f}s..."
             else:
-                sub_text = "Following Active | 🖐️ Target Palm to Deactivate"
+                sub_text = "Following Active | ✌️ Target Victory to Deactivate"
         else:
             bg_color = (0, 160, 0)
             border_color = (0, 255, 100)
             state_text = "NEXUS ON"
-            sub_text = "Active | 🖐️ Open Palm to Deactivate"
+            sub_text = "Active | ✌️ Victory Sign to Deactivate"
     elif state == NexusState.GREETING:
         # Deep Blue / Cyan Banner for Greeting Visitor
         bg_color = (130, 80, 0)
         border_color = (255, 200, 0)
         state_text = "GREETING VISITOR"
-        sub_text = "JARVIS Voice Playing... | 🖐️ Show Palm to Lock & Follow"
+        sub_text = "JARVIS Voice Playing... | ✌️ Show Victory Sign to Lock"
     else:
         # Crimson / Dark Red Banner for OFF
         bg_color = (30, 30, 160)
@@ -253,7 +254,7 @@ def draw_top_module_hud(
         if cooldown_remaining > 0.0:
             sub_text = f"Standby | Cooldown: {cooldown_remaining:3.1f}s..."
         else:
-            sub_text = "Standby | 🖐️ Open Palm to Lock & Follow"
+            sub_text = "Standby | ✌️ Show Victory Sign to Lock & Follow"
 
     cv2.rectangle(canvas, (bx1, by1), (bx2, by2), bg_color, -1)
     cv2.rectangle(canvas, (bx1, by1), (bx2, by2), border_color, 2)
@@ -361,7 +362,9 @@ class TopModule:
         greeting_cooldown: float = 15.0,
         greeting_empty_reset: float = 5.0,
         use_threaded_cam: bool = True,
-        use_mjpeg: bool = False
+        use_mjpeg: bool = False,
+        face_fullscreen: bool = False,
+        display_mode: str = "face_only"
     ):
         print("=" * 65)
         print("NEXUS PERSON FOLLOWER ROBOT — TOP MODULE INITIALIZATION")
@@ -381,10 +384,10 @@ class TopModule:
         self.use_mjpeg = use_mjpeg
 
         # 3. Initialize Multi-Person Tracker (IoU-based)
-        self.tracker = PersonTracker(max_missed_frames=30, iou_threshold=0.25)
+        self.tracker = PersonTracker(max_missed_frames=150, iou_threshold=0.25)
         print(f"[TopModule] Multi-Person Tracker Initialized")
 
-        # 4. Initialize Target Lock Manager (with 3.0s automatic loss timeout)
+        # 4. Initialize Target Lock Manager (with loss timeout)
         self.target_manager = TargetLockManager(loss_timeout_seconds=target_loss_timeout)
         print(f"[TopModule] Target Lock Manager Initialized (Loss Timeout: {target_loss_timeout:.1f}s)")
 
@@ -412,12 +415,31 @@ class TopModule:
             cooldown_seconds=greeting_cooldown,
             empty_reset_seconds=greeting_empty_reset
         )
+        self._greeting_finished_flag = False
+
+        # 6.7 Initialize Expressive Face Display (Fullscreen & Animated Emoji UI)
+        disp_enum = DisplayMode.FACE_ONLY
+        try:
+            disp_enum = DisplayMode(display_mode.lower())
+        except Exception:
+            pass
+
+        self.face_display = FaceDisplayManager(
+            window_name="NEXUS — Expressive Face UI",
+            width=1024,
+            height=600,
+            fullscreen=face_fullscreen,
+            display_mode=disp_enum
+        )
+        self._last_reacquire_time = 0.0
+        self._last_deactivate_time = 0.0
+        print(f"[TopModule] Expressive Face UI Initialized -> Mode: {disp_enum.value.upper()} | Fullscreen: {'ENABLED' if face_fullscreen else 'WINDOWED'}")
 
         # Periodic check-in timing while following
         self.last_following_checkin = 0.0
         self.following_checkin_interval = 45.0  # seconds
 
-        # 7. Initialize Gesture Recognizer (MediaPipe Open Palm 🖐️ with OpenCV Face Exclusion)
+        # 7. Initialize Gesture Recognizer (MediaPipe Victory Sign ✌️ with OpenCV Face Exclusion)
         self.gesture_recognizer = GestureRecognizer(
             min_detection_confidence=0.60,
             required_consecutive_frames=2,
@@ -439,10 +461,36 @@ class TopModule:
         print("=" * 65)
 
     def _on_greeting_complete(self):
-        """Callback invoked when startup greeting audio finishes."""
-        self.greeting_manager.finish_greeting()
-        if self.state_machine.state == NexusState.GREETING:
-            self.state_machine.finish_greeting()
+        """Thread-safe callback invoked when startup greeting audio finishes."""
+        self._greeting_finished_flag = True
+
+    def _determine_face_expression(self, target_event: TargetEvent) -> Tuple[FaceExpression, str]:
+        """
+        Maps current NexusState, TargetEvent, and target status to a FaceExpression
+        according to docs/ui.md.
+        """
+        now = time.time()
+        # 1. Target Reacquired transient expression (1.5 seconds)
+        if target_event == TargetEvent.TARGET_REACQUIRED or (now - self._last_reacquire_time) < 1.5:
+            return FaceExpression.RELIEVED, "TARGET REACQUIRED // WELCOME BACK"
+
+        # 2. State-driven expressions
+        if self.state_machine.state == NexusState.ON:
+            if self.target_manager.status == TargetStatus.LOST:
+                time_left = self.target_manager.time_until_timeout
+                return FaceExpression.SEARCHING, f"TARGET LOST // SEARCHING ({time_left:3.1f}s)"
+            else:
+                tid = self.target_manager.locked_target_id or "?"
+                return FaceExpression.FOLLOWING, f"NEXUS ON // FOLLOWING TARGET #{tid}"
+
+        elif self.state_machine.state == NexusState.GREETING:
+            return FaceExpression.GREETING, "GREETING VISITOR // JARVIS VOICE"
+
+        else:
+            # NexusState.OFF
+            if (now - self._last_deactivate_time) < 2.0 or self.greeting_manager.require_scene_clear:
+                return FaceExpression.GOODBYE, "DEACTIVATED // SEE YOU LATER"
+            return FaceExpression.IDLE, "STANDBY // READY FOR VISITOR"
 
     def run(self, source: str = "0", show: bool = True, save_path: Optional[Path] = None):
         """
@@ -483,7 +531,7 @@ class TopModule:
 
         print("\n[TopModule] Running (30 FPS Decoupled Pipeline).")
         print("            Press 'q' or 'ESC' to exit, 'm' to toggle mirror flip.")
-        print("            Show Open Palm (🖐️) to Lock onto target and toggle NEXUS ON/OFF.\n")
+        print("            Show Victory Sign (✌️) to Lock onto target and toggle NEXUS ON/OFF.\n")
 
         fps_buffer = []
         frame_idx = 0
@@ -501,11 +549,19 @@ class TopModule:
 
                 t_start = time.perf_counter()
 
+                # Process asynchronous audio completion flags in main thread
+                if self._greeting_finished_flag:
+                    self._greeting_finished_flag = False
+                    self.greeting_manager.finish_greeting()
+                    if self.state_machine.state == NexusState.GREETING:
+                        self.state_machine.finish_greeting()
+
                 # Step 0: Apply horizontal flip for natural webcam view
                 if self.flip_horizontal:
                     frame = cv2.flip(frame, 1)
 
                 frame_h, frame_w = frame.shape[:2]
+                target_event = TargetEvent.NONE
 
                 # Step 1, 2 & 3: State-Driven Perception Pipeline
                 if self.state_machine.state == NexusState.ON:
@@ -517,7 +573,11 @@ class TopModule:
                     if self.visual_tracker.is_tracking:
                         track_ok, tracked_bbox = self.visual_tracker.update(frame)
 
-                    need_yolo_sync = (not track_ok) or (self.sync_interval > 0 and frame_idx % self.sync_interval == 0)
+                    need_yolo_sync = (
+                        (not track_ok)
+                        or (self.target_manager.status == TargetStatus.LOST)
+                        or (self.sync_interval > 0 and frame_idx % self.sync_interval == 0)
+                    )
 
                     if need_yolo_sync:
                         raw_persons = self.person_detector.detect(frame)
@@ -527,14 +587,23 @@ class TopModule:
 
                         if self.target_manager.is_target_present and self.target_manager.locked_person is not None:
                             self.visual_tracker.start_track(frame, self.target_manager.locked_person.bbox)
+                            if target_event == TargetEvent.TARGET_REACQUIRED:
+                                self._last_reacquire_time = time.time()
+                                self.speech_manager.stop()
+                                self.speech_manager.speak_target_locked()
+                                print(f"\n[TopModule] 🎯 Target #{self.target_manager.locked_target_id} re-acquired! Resuming tracking.")
                         elif target_event == TargetEvent.TARGET_LOST:
-                            # Target temporarily lost (<3.0s) -> Speech: "Where are you?"
+                            # Target temporarily lost -> Stop visual tracker to prevent background lock!
+                            self.visual_tracker.stop()
                             self.speech_manager.speak_target_lost()
                         elif target_event == TargetEvent.TARGET_LOST_TIMEOUT:
-                            # Target missing > 3.0s -> Speech: "I can't find you." -> NEXUS OFF!
+                            # Target missing beyond grace period -> Speech: "I can't find you." -> NEXUS OFF!
                             self.visual_tracker.stop()
+                            self.target_manager.unlock_target()
+                            self.greeting_manager.on_deactivation()
+                            self._last_deactivate_time = time.time()
                             self.speech_manager.speak_target_timeout()
-                            self.state_machine.force_off("Target Lost Timeout (>3.0s)")
+                            self.state_machine.force_off("Target Lost Timeout")
                     else:
                         # High-speed tracking path (~2-4 ms compute time)
                         if self.target_manager.locked_person is not None and tracked_bbox is not None:
@@ -568,12 +637,14 @@ class TopModule:
                     else:
                         gestures = last_gestures
 
-                    # Check Deactivation Password Gesture (🖐️ Open Palm from target)
+                    # Check Deactivation Password Gesture (✌️ Victory Sign from target)
                     if self.gesture_recognizer.check_password_event(gestures):
-                        pwd_gesture = next((g for g in gestures if g.is_open_palm), None)
+                        pwd_gesture = next((g for g in gestures if (getattr(g, "is_victory", False) or g.is_open_palm)), None)
                         if pwd_gesture is not None and not self.state_machine.is_in_cooldown:
                             self.visual_tracker.stop()
                             self.target_manager.unlock_target()
+                            self.greeting_manager.on_deactivation()
+                            self._last_deactivate_time = time.time()
                             self.speech_manager.speak_deactivation()
                             self.state_machine.handle_password_gesture(
                                 reason="Target Deactivation Accepted"
@@ -602,15 +673,19 @@ class TopModule:
 
                     # Step 4: Visitor Greeting Check (3-Layer Anti-Spam)
                     if self.state_machine.state == NexusState.OFF:
-                        should_greet, cand_id = self.greeting_manager.evaluate(tracks, is_off_state=True)
+                        should_greet, cand_id = self.greeting_manager.evaluate(
+                            tracks,
+                            is_off_state=True,
+                            is_speaking=self.speech_manager.is_speaking
+                        )
                         if should_greet and cand_id is not None:
                             self.greeting_manager.mark_greeted(cand_id)
                             self.state_machine.start_greeting(reason=f"Visitor #{cand_id} Detected")
                             self.speech_manager.speak_greeting(on_complete=self._on_greeting_complete)
 
-                    # Step 5: Activation Password Gesture Check (🖐️ Open Palm to Lock & Follow)
+                    # Step 5: Activation Password Gesture Check (✌️ Victory Sign to Lock & Follow)
                     if self.gesture_recognizer.check_password_event(gestures):
-                        pwd_gesture = next((g for g in gestures if g.is_open_palm), None)
+                        pwd_gesture = next((g for g in gestures if (getattr(g, "is_victory", False) or g.is_open_palm)), None)
                         if not self.state_machine.is_in_cooldown:
                             candidate: Optional[TrackedPerson] = None
                             if pwd_gesture and tracks:
@@ -621,6 +696,7 @@ class TopModule:
                             if candidate is not None:
                                 self.speech_manager.stop()
                                 self.greeting_manager.finish_greeting()
+                                self.greeting_manager.mark_interacted(candidate.track_id)
                                 self.target_manager.lock_target(candidate.track_id, candidate)
                                 self.visual_tracker.start_track(frame, candidate.bbox)
                                 self.state_machine.handle_password_gesture(
@@ -632,6 +708,7 @@ class TopModule:
                                 candidate = tracks[0]
                                 self.speech_manager.stop()
                                 self.greeting_manager.finish_greeting()
+                                self.greeting_manager.mark_interacted(candidate.track_id)
                                 self.target_manager.lock_target(candidate.track_id, candidate)
                                 self.visual_tracker.start_track(frame, candidate.bbox)
                                 self.state_machine.handle_password_gesture(
@@ -697,8 +774,14 @@ class TopModule:
                     writer.write(annotated_frame)
 
                 if show:
-                    cv2.imshow("NEXUS — Top Module", annotated_frame)
-                    key = cv2.waitKey(1) & 0xFF
+                    expr, face_status = self._determine_face_expression(target_event)
+                    key = self.face_display.show(
+                        expression=expr,
+                        status_label=face_status,
+                        is_speaking=self.speech_manager.is_speaking,
+                        steering_cmd=steering_cmd.value,
+                        camera_frame=annotated_frame
+                    )
                     if key in [ord("q"), 27]:  # 'q' or ESC
                         print("\n[TopModule] Termination requested by user.")
                         break
@@ -711,6 +794,7 @@ class TopModule:
                             if tracks:
                                 self.speech_manager.stop()
                                 self.greeting_manager.finish_greeting()
+                                self.greeting_manager.mark_interacted(tracks[0].track_id)
                                 self.target_manager.lock_target(tracks[0].track_id, tracks[0])
                                 self.visual_tracker.start_track(frame, tracks[0].bbox)
                             self.speech_manager.speak_activation()
@@ -719,12 +803,16 @@ class TopModule:
                         else:
                             self.visual_tracker.stop()
                             self.target_manager.unlock_target()
+                            self.greeting_manager.on_deactivation()
+                            self._last_deactivate_time = time.time()
                             self.speech_manager.speak_deactivation()
                             self.state_machine.handle_password_gesture(reason="Manual Key Toggle")
                     elif key in [ord("u"), ord("U")]:
                         # Manual target unlock (Press 'u')
                         self.visual_tracker.stop()
                         self.target_manager.unlock_target()
+                        self.greeting_manager.on_deactivation()
+                        self._last_deactivate_time = time.time()
                         self.speech_manager.speak_deactivation()
                         if self.state_machine.state == NexusState.ON:
                             self.state_machine.force_off("Manual Target Unlock")
@@ -732,6 +820,8 @@ class TopModule:
         except KeyboardInterrupt:
             print("\n[TopModule] KeyboardInterrupt caught.")
         finally:
+            if hasattr(self, "face_display"):
+                self.face_display.close()
             if hasattr(self, "visual_tracker"):
                 self.visual_tracker.stop()
             if hasattr(self, "speech_manager"):
@@ -769,8 +859,8 @@ def main():
         help="YOLO inference resolution (default 640 for nexus_person_detector.onnx, or 320 for 30 FPS Raspberry Pi speed)"
     )
     parser.add_argument(
-        "--conf", type=float, default=0.50,
-        help="Person detection confidence threshold"
+        "--conf", type=float, default=0.45,
+        help="Person detection confidence threshold (default 0.45 for responsive re-acquisition)"
     )
     parser.add_argument(
         "--gesture-interval", type=int, default=4,
@@ -805,8 +895,8 @@ def main():
         help="Request MJPEG camera codec instead of clean uncompressed YUYV (use only if camera requires it)"
     )
     parser.add_argument(
-        "--loss-timeout", type=float, default=3.0,
-        help="Timeout in seconds before target loss triggers NEXUS OFF"
+        "--loss-timeout", type=float, default=4.0,
+        help="Timeout in seconds before target loss triggers NEXUS OFF (default 4.0s)"
     )
     parser.add_argument(
         "--deadzone", type=float, default=0.15,
@@ -836,6 +926,15 @@ def main():
         "--save", type=str, default=None,
         help="Optional path to save annotated video output (.mp4)"
     )
+    parser.add_argument(
+        "--fullscreen", "-f", action="store_true",
+        help="Launch the Robot Face UI in Fullsize / Fullscreen mode (docs/ui.md)"
+    )
+    parser.add_argument(
+        "--display-mode", type=str, default="face_only",
+        choices=["face_only", "face_pip", "camera_hud"],
+        help="Initial screen display mode: 'face_only' (clean robot face), 'face_pip' (face + camera PiP), or 'camera_hud' (developer HUD)"
+    )
 
     args = parser.parse_args()
 
@@ -856,7 +955,9 @@ def main():
         greeting_cooldown=args.greeting_cooldown,
         greeting_empty_reset=args.greeting_empty_reset,
         use_threaded_cam=not args.no_threaded_cam,
-        use_mjpeg=args.mjpeg
+        use_mjpeg=args.mjpeg,
+        face_fullscreen=args.fullscreen,
+        display_mode=args.display_mode
     )
 
     save_target = Path(args.save) if args.save else None
