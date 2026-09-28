@@ -734,7 +734,8 @@ class TopModule:
                     target_person=current_target,
                     frame_width=frame_w
                 )
-                self.uart_bridge.send_command(steering_cmd.value)
+                target_dx = self.follow_controller.last_dx
+                self.uart_bridge.send_command(steering_cmd.value, dx=target_dx)
 
                 # Step 7: Telemetry & Benchmark
                 t_latency = (time.perf_counter() - t_start) * 1000.0
@@ -764,7 +765,7 @@ class TopModule:
                 target_str = f"#{self.target_manager.locked_target_id}" if self.target_manager.locked_target_id else "None"
                 term_msg = (
                     f"\r[{self.state_machine.state.value}] Target: {target_str} | "
-                    f"Cmd: [{steering_cmd.value}] | Tracks: {len(tracks)} | "
+                    f"Cmd: [{steering_cmd.value}, dx:{target_dx:+.2f}] | Tracks: {len(tracks)} | "
                     f"Latency: {t_latency:5.1f} ms | FPS: {avg_fps:4.1f}"
                 )
                 sys.stdout.write(term_msg)

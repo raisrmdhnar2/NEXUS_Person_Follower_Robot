@@ -150,12 +150,14 @@ class Esp32UartBridge:
             self.is_simulated = True
             return False
 
-    def send_command(self, cmd: str, force: bool = False) -> bool:
+    def send_command(self, cmd: str, dx: float = 0.0, force: bool = False) -> bool:
         """
-        Transmits a 1-byte command ('-', 'x', '+', 's') to the ESP32.
+        Transmits a command packet "[cmd],[dx]\n" to the ESP32.
+        Example: "s,+0.00\n", "x,+0.03\n", "-,-0.42\n", "+,+0.55\n"
 
         Args:
-            cmd: Single-character string or SteeringCommand value.
+            cmd: Single-character string or SteeringCommand value ('-', 'x', '+', 's').
+            dx: Normalized horizontal target offset in range [-1.0, 1.0].
             force: If True, bypasses transmission rate limiter.
 
         Returns:
@@ -168,17 +170,21 @@ class Esp32UartBridge:
 
         # Extract first character
         char_cmd = str(cmd)[0] if cmd else "s"
+        # If command is STOP ('s'), clamp dx to 0.00
+        dx_val = 0.0 if char_cmd == "s" else float(dx)
+        packet = f"{char_cmd},{dx_val:+.2f}\n"
+
         self.last_send_time = now
         self.last_command = char_cmd
 
         if self.is_simulated or not self.is_connected:
             # Simulated transmission
-            self.total_bytes_sent += 1
+            self.total_bytes_sent += len(packet)
             return True
 
         try:
-            # Write 1-byte ASCII character
-            data = char_cmd.encode("ascii")
+            # Write ASCII packet ending with newline '\n'
+            data = packet.encode("ascii")
             bytes_written = self.serial_conn.write(data)
             self.serial_conn.flush()
             self.total_bytes_sent += bytes_written
@@ -194,8 +200,8 @@ class Esp32UartBridge:
         """Closes serial connection cleanly."""
         if self.serial_conn and self.serial_conn.is_open:
             try:
-                # Send STOP command before closing
-                self.serial_conn.write(b"s")
+                # Send STOP packet before closing
+                self.serial_conn.write(b"s,+0.00\n")
                 self.serial_conn.flush()
                 self.serial_conn.close()
             except Exception:
