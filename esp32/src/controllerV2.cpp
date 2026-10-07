@@ -49,7 +49,7 @@ void Initializing() {
     pixels.show();
     delay(200);
   }
-  for(uint8_t n = 0; n < 256; n++) {
+  for(uint8_t n = 255; n > 0; n++) {
     pixels.setPixelColor(0, pixels.Color(n, 0, 0));
     pixels.show();
     delay(200);
