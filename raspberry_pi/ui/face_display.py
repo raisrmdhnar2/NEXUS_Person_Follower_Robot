@@ -347,24 +347,23 @@ class FaceDisplayManager:
                      (mouth_center[0] + int(mouth_w * 0.6), mouth_y), primary_color, 5, cv2.LINE_AA)
 
         # ---------------------------------------------------------------------
-        # Top Futuristic Status Pill
+        # Top Minimalist Status Pill
         # ---------------------------------------------------------------------
-        pill_text = f"NEXUS // {status_label}"
-        (tw, th), bl = cv2.getTextSize(pill_text, cv2.FONT_HERSHEY_DUPLEX, 0.65, 1)
+        is_on_state = "on" in status_label.lower() or expression in [
+            FaceExpression.ACTIVATION, FaceExpression.FOLLOWING, FaceExpression.SEARCHING, FaceExpression.RELIEVED
+        ]
+        pill_text = "NEXUS // ON" if is_on_state else "NEXUS // OFF"
+        pill_color = self.COLOR_GREEN if is_on_state else self.COLOR_RED
+
+        (tw, th), bl = cv2.getTextSize(pill_text, cv2.FONT_HERSHEY_DUPLEX, 0.70, 1)
         pw = tw + 40
         ph = th + 18
         px1 = (w - pw) // 2
         py1 = 18
-        cv2.rectangle(canvas, (px1, py1), (px1 + pw, py1 + ph), (25, 20, 35), -1)
-        cv2.rectangle(canvas, (px1, py1), (px1 + pw, py1 + ph), primary_color, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (px1, py1), (px1 + pw, py1 + ph), (20, 18, 25), -1)
+        cv2.rectangle(canvas, (px1, py1), (px1 + pw, py1 + ph), pill_color, 1, cv2.LINE_AA)
         cv2.putText(canvas, pill_text, (px1 + 20, py1 + ph - bl - 3),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.65, primary_color, 1, cv2.LINE_AA)
-
-        # Bottom Subtitle Hint
-        hint_text = "[F] Fullscreen | [V] Switch View Mode | [Q] Exit"
-        (hw, hh), _ = cv2.getTextSize(hint_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-        cv2.putText(canvas, hint_text, ((w - hw) // 2, h - 16),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 110, 140), 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_DUPLEX, 0.70, pill_color, 1, cv2.LINE_AA)
 
     # -------------------------------------------------------------------------
     # Composite Master Frame Builder

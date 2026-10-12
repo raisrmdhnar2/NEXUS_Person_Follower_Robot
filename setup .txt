@@ -7,6 +7,7 @@ ping raspberrypi.local
 python top_module.py --detect-interval 3
 python top_module.py --model models/yolo/yolov8n.pt --imgsz 320 --fullscreen --detect-interval 5
 python top_module.py --fullscreen
+python top_module.py --model models/yolo/nexus_person_detector_int16.tflite --imgsz 320 --fullscreen --detect-interval 5
 
 python3 -m serial.tools.miniterm /dev/ttyACM0 115200
 

@@ -176,162 +176,53 @@ def draw_top_module_hud(
     cooldown_remaining: float = 0.0
 ) -> np.ndarray:
     """
-    Renders top module HUD with Target Locking, Hand Gestures,
-    Master State Banner, Steering Command Badge, and system telemetry.
+    Renders a minimalist top module HUD displaying only 'Nexus' and 'On/Off'.
     """
     canvas = frame.copy()
     h, w = canvas.shape[:2]
 
-    # -------------------------------------------------------------------------
-    # A. Draw Tracked Persons & Locked Target Overlay
-    # -------------------------------------------------------------------------
-    canvas = draw_target_overlay(
-        canvas=canvas,
-        tracks=tracks,
-        target_manager=target_manager,
-        frame_width=w
-    )
+    # Draw minimalist bounding box for locked target or detected persons
+    if target_manager.locked_person is not None:
+        px1, py1, px2, py2 = target_manager.locked_person.bbox
+        # Neon Green box for locked target
+        cv2.rectangle(canvas, (px1, py1), (px2, py2), (0, 255, 100), 2)
+    elif tracks:
+        for t in tracks:
+            tx1, ty1, tx2, ty2 = t.bbox
+            cv2.rectangle(canvas, (tx1, ty1), (tx2, ty2), (180, 180, 180), 1)
 
     # -------------------------------------------------------------------------
-    # B. Draw Hand Gesture Detections (Blue or Gold Box)
+    # Minimalist Badge: "NEXUS" & "ON / OFF"
     # -------------------------------------------------------------------------
-    for g in gestures:
-        hx1, hy1, hx2, hy2 = g.hand_bbox
-        is_pwd = getattr(g, "is_victory", False) or g.is_open_palm
-        box_color = (0, 215, 255) if is_pwd else (255, 140, 0)  # Gold if Password, else Blue
+    is_on = (state == NexusState.ON)
+    badge_w, badge_h = 240, 84
+    bx1 = (w - badge_w) // 2
+    by1 = 16
+    bx2 = bx1 + badge_w
+    by2 = by1 + badge_h
 
-        cv2.rectangle(canvas, (hx1, hy1), (hx2, hy2), box_color, 2)
+    # Semi-transparent dark rounded/bordered background
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (bx1, by1), (bx2, by2), (18, 18, 22), -1)
+    status_color = (0, 230, 80) if is_on else (50, 50, 240)  # Bright Green if ON, Red if OFF
+    cv2.rectangle(overlay, (bx1, by1), (bx2, by2), status_color, 2)
+    cv2.addWeighted(overlay, 0.75, canvas, 0.25, 0, canvas)
 
-        label = "✌️ PASSWORD (Victory)" if is_pwd else f"Hand ({g.handedness})"
-        (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-        ty1 = max(0, hy1 - th - bl - 4)
-        cv2.rectangle(canvas, (hx1, ty1), (hx1 + tw + 6, hy1), box_color, -1)
-        cv2.putText(canvas, label, (hx1 + 3, hy1 - bl - 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
+    # Line 1: "Nexus"
+    title_text = "Nexus"
+    (tw1, th1), _ = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_DUPLEX, 0.75, 1)
+    tx1 = bx1 + (badge_w - tw1) // 2
+    ty1 = by1 + 32
+    cv2.putText(canvas, title_text, (tx1, ty1),
+                cv2.FONT_HERSHEY_DUPLEX, 0.75, (245, 245, 245), 1, cv2.LINE_AA)
 
-    # -------------------------------------------------------------------------
-    # C. Top Center Master State Banner
-    # -------------------------------------------------------------------------
-    banner_w, banner_h = 380, 52
-    bx1 = (w - banner_w) // 2
-    by1 = 12
-    bx2 = bx1 + banner_w
-    by2 = by1 + banner_h
-
-    if state == NexusState.ON:
-        if target_manager.status == TargetStatus.LOST:
-            # Flashing Amber / Crimson Banner when target is missing
-            bg_color = (0, 69, 255)
-            border_color = (0, 140, 255)
-            time_left = target_manager.time_until_timeout
-            state_text = f"⚠️ TARGET LOST ({time_left:3.1f}s)"
-            sub_text = "Searching... Auto NEXUS OFF if not found"
-        elif target_manager.locked_target_id is not None:
-            # Vibrant Green Banner with locked target ID
-            bg_color = (0, 160, 0)
-            border_color = (0, 255, 100)
-            state_text = f"NEXUS ON — TARGET #{target_manager.locked_target_id}"
-            if cooldown_remaining > 0.0:
-                sub_text = f"Following Active | Cooldown: {cooldown_remaining:3.1f}s..."
-            else:
-                sub_text = "Following Active | ✌️ Target Victory to Deactivate"
-        else:
-            bg_color = (0, 160, 0)
-            border_color = (0, 255, 100)
-            state_text = "NEXUS ON"
-            sub_text = "Active | ✌️ Victory Sign to Deactivate"
-    elif state == NexusState.GREETING:
-        # Deep Blue / Cyan Banner for Greeting Visitor
-        bg_color = (130, 80, 0)
-        border_color = (255, 200, 0)
-        state_text = "GREETING VISITOR"
-        sub_text = "JARVIS Voice Playing... | ✌️ Show Victory Sign to Lock"
-    else:
-        # Crimson / Dark Red Banner for OFF
-        bg_color = (30, 30, 160)
-        border_color = (60, 60, 255)
-        state_text = "NEXUS OFF"
-        if cooldown_remaining > 0.0:
-            sub_text = f"Standby | Cooldown: {cooldown_remaining:3.1f}s..."
-        else:
-            sub_text = "Standby | ✌️ Show Victory Sign to Lock & Follow"
-
-    cv2.rectangle(canvas, (bx1, by1), (bx2, by2), bg_color, -1)
-    cv2.rectangle(canvas, (bx1, by1), (bx2, by2), border_color, 2)
-
-    # Main State Text
-    (tw, th), bl = cv2.getTextSize(state_text, cv2.FONT_HERSHEY_SIMPLEX, 0.78, 2)
-    tx = bx1 + (banner_w - tw) // 2
-    ty = by1 + 28
-    cv2.putText(canvas, state_text, (tx, ty),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.78, (255, 255, 255), 2, cv2.LINE_AA)
-
-    # Subtitle Instruction / Cooldown Text
-    (stw, sth), sbl = cv2.getTextSize(sub_text, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
-    stx = bx1 + (banner_w - stw) // 2
-    sty = by1 + 45
-    cv2.putText(canvas, sub_text, (stx, sty),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (235, 235, 235), 1, cv2.LINE_AA)
-
-    # -------------------------------------------------------------------------
-    # D. Steering Command Badge (ESP32 UART Output Indicator)
-    # -------------------------------------------------------------------------
-    cmd_w, cmd_h = 240, 28
-    cx1 = (w - cmd_w) // 2
-    cy1 = by2 + 6
-    cx2 = cx1 + cmd_w
-    cy2 = cy1 + cmd_h
-
-    # Select color & icon based on active command
-    if steering_cmd == SteeringCommand.LEFT:
-        cmd_bg = (0, 140, 255)       # Amber/Orange for Left
-        cmd_text = "◄◄ BELOK KIRI [-]"
-    elif steering_cmd == SteeringCommand.RIGHT:
-        cmd_bg = (0, 140, 255)       # Amber/Orange for Right
-        cmd_text = "BELOK KANAN [+] ►►"
-    elif steering_cmd == SteeringCommand.CENTER:
-        cmd_bg = (0, 180, 0)         # Vibrant Green for Center
-        cmd_text = "▲ TARGET CENTER [x] ▲"
-    else:
-        cmd_bg = (45, 45, 45)         # Dark Gray for Stop
-        cmd_text = "■ MOTOR STOP [s] ■"
-
-    cv2.rectangle(canvas, (cx1, cy1), (cx2, cy2), cmd_bg, -1)
-    cv2.rectangle(canvas, (cx1, cy1), (cx2, cy2), (220, 220, 220), 1)
-
-    (ctw, cth), cbl = cv2.getTextSize(cmd_text, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 2)
-    ctx = cx1 + (cmd_w - ctw) // 2
-    cty = cy1 + (cmd_h + cth) // 2 - 2
-    cv2.putText(canvas, cmd_text, (ctx, cty),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2, cv2.LINE_AA)
-
-    # -------------------------------------------------------------------------
-    # E. Telemetry & Counters
-    # -------------------------------------------------------------------------
-    # Top Left: Perception & Target Status Box
-    cv2.rectangle(canvas, (10, 10), (220, 80), (30, 30, 30), -1)
-    cv2.rectangle(canvas, (10, 10), (220, 80), (70, 70, 70), 1)
-
-    target_str = f"#{target_manager.locked_target_id}" if target_manager.locked_target_id is not None else "None"
-    status_col = (0, 215, 255) if target_manager.is_locked else (180, 180, 180)
-
-    cv2.putText(canvas, f"Tracks : {len(tracks)}", (18, 28),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
-    cv2.putText(canvas, f"Target : {target_str} ({target_manager.status.value})", (18, 48),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, status_col, 1, cv2.LINE_AA)
-    cv2.putText(canvas, f"UART   : {uart_status[:18]}", (18, 68),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 220, 255), 1, cv2.LINE_AA)
-
-    # Top Right: Flip / Mirror status
-    flip_str = f"Flip: {'ON' if is_flipped else 'OFF'} (Key 'm')"
-    cv2.putText(canvas, flip_str, (w - 180, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
-
-    # Bottom Overlay: Performance & Event status
-    cv2.rectangle(canvas, (10, h - 35), (w - 10, h - 10), (25, 25, 25), -1)
-    info_str = f"Speed: {fps:4.1f} FPS | Latency: {latency_ms:5.1f} ms | UART CMD: [{steering_cmd.value}] | Status: {status_msg}"
-    cv2.putText(canvas, info_str, (18, h - 18),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+    # Line 2: "On" or "Off"
+    state_text = "On" if is_on else "Off"
+    (tw2, th2), _ = cv2.getTextSize(state_text, cv2.FONT_HERSHEY_DUPLEX, 1.0, 2)
+    tx2 = bx1 + (badge_w - tw2) // 2
+    ty2 = by1 + 70
+    cv2.putText(canvas, state_text, (tx2, ty2),
+                cv2.FONT_HERSHEY_DUPLEX, 1.0, status_color, 2, cv2.LINE_AA)
 
     return canvas
 
@@ -735,7 +626,8 @@ class TopModule:
                     frame_width=frame_w
                 )
                 target_dx = self.follow_controller.last_dx
-                self.uart_bridge.send_command(steering_cmd.value, dx=target_dx)
+                is_active = (self.state_machine.state == NexusState.ON) and (self.target_manager.is_target_present)
+                self.uart_bridge.send_command(is_active=is_active, dx=target_dx)
 
                 # Step 7: Telemetry & Benchmark
                 t_latency = (time.perf_counter() - t_start) * 1000.0
@@ -762,11 +654,12 @@ class TopModule:
                 )
 
                 # Terminal telemetry log
+                state_str = "ON" if self.state_machine.state == NexusState.ON else "OFF"
                 target_str = f"#{self.target_manager.locked_target_id}" if self.target_manager.locked_target_id else "None"
                 term_msg = (
-                    f"\r[{self.state_machine.state.value}] Target: {target_str} | "
-                    f"Cmd: [{steering_cmd.value}, dx:{target_dx:+.2f}] | Tracks: {len(tracks)} | "
-                    f"Latency: {t_latency:5.1f} ms | FPS: {avg_fps:4.1f}"
+                    f"\r[Nexus {state_str}] Target: {target_str} | "
+                    f"UART Sent: '{self.uart_bridge.last_command}' | "
+                    f"FPS: {avg_fps:4.1f} | Latency: {t_latency:4.1f}ms "
                 )
                 sys.stdout.write(term_msg)
                 sys.stdout.flush()

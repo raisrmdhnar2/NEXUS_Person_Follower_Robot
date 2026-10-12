@@ -150,13 +150,15 @@ class Esp32UartBridge:
             self.is_simulated = True
             return False
 
-    def send_command(self, cmd: str, dx: float = 0.0, force: bool = False) -> bool:
+    def send_command(self, is_active: bool, dx: float = 0.0, force: bool = False) -> bool:
         """
-        Transmits a command packet "[cmd],[dx]\n" to the ESP32.
-        Example: "s,+0.00\n", "x,+0.03\n", "-,-0.42\n", "+,+0.55\n"
+        Transmits command packet to the ESP32:
+        - If robot is inactive (OFF / STOP / Target Lost): transmits "X\n"
+        - If robot is active (ON / Following): transmits "{dx:+.2f}\n" (e.g. "+0.25\n", "-0.14\n")
 
         Args:
-            cmd: Single-character string or SteeringCommand value ('-', 'x', '+', 's').
+            is_active: True if robot is actively following, False if OFF/STOP.
+                       (Also accepts legacy string 's'/'x'/'+'/'-' for backward compatibility).
             dx: Normalized horizontal target offset in range [-1.0, 1.0].
             force: If True, bypasses transmission rate limiter.
 
@@ -168,14 +170,21 @@ class Esp32UartBridge:
         if not force and (now - self.last_send_time) < self.min_interval:
             return True
 
-        # Extract first character
-        char_cmd = str(cmd)[0] if cmd else "s"
-        # If command is STOP ('s'), clamp dx to 0.00
-        dx_val = 0.0 if char_cmd == "s" else float(dx)
-        packet = f"{char_cmd},{dx_val:+.2f}\n"
+        # Support backward compatibility if is_active is passed as a string command
+        if isinstance(is_active, str):
+            active_bool = is_active.lower() not in ["s", "off", "x_stop"]
+        else:
+            active_bool = bool(is_active)
+
+        # Build packet according to new protocol
+        if not active_bool:
+            packet = "X\n"
+        else:
+            dx_val = float(dx)
+            packet = f"{dx_val:+.2f}\n"
 
         self.last_send_time = now
-        self.last_command = char_cmd
+        self.last_command = packet.strip()
 
         if self.is_simulated or not self.is_connected:
             # Simulated transmission
@@ -200,8 +209,8 @@ class Esp32UartBridge:
         """Closes serial connection cleanly."""
         if self.serial_conn and self.serial_conn.is_open:
             try:
-                # Send STOP packet before closing
-                self.serial_conn.write(b"s,+0.00\n")
+                # Send STOP packet 'X\n' before closing
+                self.serial_conn.write(b"X\n")
                 self.serial_conn.flush()
                 self.serial_conn.close()
             except Exception:
