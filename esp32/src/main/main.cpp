@@ -2,8 +2,8 @@
 
 Adafruit_VL53L1X vl53 = Adafruit_VL53L1X(XSHUT_PIN, IRQ_PIN);
 Adafruit_NeoPixel pixels(NUMPIXELS, WS2812PIN, NEO_GRB + NEO_KHZ800);
-struct PIDDefaultdata Forward_PID;
-struct PIDDefaultdata Rotation_PID;
+struct PIDDefaultdata Forward_PID = {0};
+struct PIDDefaultdata Rotation_PID = {0};
 
 bool state = false;
 
@@ -11,18 +11,12 @@ void PIDInitialize() {
   Forward_PID.Kp = 100;
   Forward_PID.Ki = 10;
   Forward_PID.Kd = 1;
-  Forward_PID.past_time = 0;
   Forward_PID.setpoin = 1000;
-  Forward_PID.past_value = 0;
-  Forward_PID.integral_value = 0;
 
   Rotation_PID.Kp = 100;
   Rotation_PID.Ki = 10;
   Rotation_PID.Kd = 1;
-  Rotation_PID.past_time = 0;
   Rotation_PID.setpoin = 0;
-  Rotation_PID.past_value = 0;
-  Rotation_PID.integral_value = 0;
 }
 
 void setup() {
