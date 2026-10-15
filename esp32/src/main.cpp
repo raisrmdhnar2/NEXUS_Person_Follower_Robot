@@ -48,14 +48,12 @@ void loop() {
 
     uint8_t startpointer = 0;
     if(SerialInput[0] == 'S') {
-      Serial.println("Robot Stopped");
       startpointer++;
       state = false;
     }
     else if(SerialInput[0] == 't') testscanner(SerialInput);
     else {
       state = true;
-      Serial.println("Robot Go");
     }
     Rotation_PID.now_value = 0;
     int8_t multiplier = 1;
@@ -74,7 +72,7 @@ void loop() {
       Rotation_PID.now_value += (int)(SerialInput[chartoint] - '0');
     }
     Rotation_PID.now_value *= multiplier;
-    Serial.println(PIDController(&Rotation_PID));
+    ConditionalAdderControl();
   }
   // ToFSensorRead();
 }
@@ -192,10 +190,7 @@ float PIDController(PIDDefaultdata* n) {
 
   derivative = ((error - n->past_value) / delta_time) * n->Kd;
 
-  Serial.printf("delta time : %d \n", delta_time);
-  Serial.printf("Proportional : %f \n", proportional);
-  Serial.printf("integral : %f \n", integral);
-  Serial.printf("derivative : %f \n", derivative);
+  Serial.printf("%d %d %d %d \n", delta_time, proportional, integral, derivative);
 
   return (proportional + integral + derivative);
 }
