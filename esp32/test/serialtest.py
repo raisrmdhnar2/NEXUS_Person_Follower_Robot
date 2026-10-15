@@ -7,7 +7,7 @@ from pyqtgraph.Qt import QtCore
 import serial
 
 # Configure your serial port
-PORT = "COM14"
+PORT = "/dev/ttyACM0"  # Update this to your ESP32-S3 serial port
 BAUD_RATE = 115200
 
 # Target frequency settings (25 Hz)
@@ -28,6 +28,8 @@ i_buffer = deque(maxlen=BUFFER_SIZE)
 d_buffer = deque(maxlen=BUFFER_SIZE)
 
 start_time = time.time()
+
+next_send_time = time.time()
 
 
 def main():
@@ -74,8 +76,6 @@ def main():
   curve_d = plot.plot(
       pen=pg.mkPen(color=(255, 215, 0), width=2), name="Derivative (D)"
   )
-
-  next_send_time = time.time()
 
   def update_loop():
     global RotationData, next_send_time
