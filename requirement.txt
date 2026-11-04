@@ -16,23 +16,29 @@ numpy>=1.24.0,<2.0.0
 opencv-python>=4.8.0
 Pillow>=10.0.0
 
-# --- 2. Person Detection (YOLOv8 & ONNX Runtime Engine) ---
+# --- 2. Person Detection & Deep Learning Inference ---
+torch>=2.0.0
 ultralytics>=8.1.0
 onnx>=1.14.0
 onnxruntime>=1.16.0
 
-# --- 3. Hand Gesture Recognition (MediaPipe Tasks 3D Landmarks) ---
+# --- 3. Hand Gesture Recognition (MediaPipe Tasks) ---
 mediapipe>=0.10.9
+protobuf>=3.20.0,<4.26.0
 
 # --- 4. Hardware Serial Communication (ESP32 UART Bridge) ---
 pyserial>=3.5
 
-# --- 5. Display HMI & JARVIS Voice Audio Playback ---
+# --- 5. Display HMI & Speech Audio Playback ---
 pygame>=2.5.0
 edge-tts>=6.1.9
 
-# --- 6. Data, Configuration & Model Evaluation Utilities ---
+# --- 6. Data, Configuration & Evaluation Utilities ---
 PyYAML>=6.0
 matplotlib>=3.7.0
 pandas>=2.0.0
 tqdm>=4.65.0
+
+# --- 7. Model Quantization & Development Tools (Notebook / Laptop) ---
+# tensorflow>=2.15.0,<2.16.0
+# ipykernel>=6.20.0
