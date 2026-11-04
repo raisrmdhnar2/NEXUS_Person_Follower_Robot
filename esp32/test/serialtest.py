@@ -84,6 +84,7 @@ def main():
 
     # 1. SENDING DATA (25 times per second)
     if current_time >= next_send_time:
+      print(f"Sending -> RotationData: {RotationData}")
       message = f"{RotationData}\n"
       ser.write(message.encode("utf-8"))
       next_send_time += INTERVAL
@@ -125,9 +126,13 @@ def main():
               curve_d.setData(t_list, list(d_buffer))
 
               # Modify mock target data for testing flow
-              RotationData = RotationData - 10
-              if RotationData < -400:
-                RotationData = 400
+              totalval = p_val + i_val + d_val
+              print(f"Total PID Value: {totalval}")
+              if totalval > 0:
+                RotationData = RotationData + 1
+              elif totalval < 0:
+                RotationData = RotationData - 1
+              
 
         except (UnicodeDecodeError, ValueError) as e:
           # Catch parse errors if a packet is fragmented or malformed
