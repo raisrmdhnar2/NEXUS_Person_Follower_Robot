@@ -112,7 +112,9 @@ class SpeechManager:
 
         self.assets_dir.mkdir(parents=True, exist_ok=True)
 
-        # Check for system playback utilities
+        # Check for system playback utilities (Prioritize PipeWire/PulseAudio tools on modern Raspberry Pi OS)
+        self.pw_play_available = shutil.which("pw-play") is not None
+        self.paplay_available = shutil.which("paplay") is not None
         self.aplay_available = shutil.which("aplay") is not None
         self.espeak_available = shutil.which("espeak") is not None or shutil.which("espeak-ng") is not None
         self.espeak_bin = shutil.which("espeak-ng") or shutil.which("espeak") or "espeak"
@@ -125,7 +127,17 @@ class SpeechManager:
         self._last_event: Optional[VoiceEvent] = None
         self._is_playing: bool = False
 
-        status_backend = "aplay (ALSA)" if self.aplay_available else ("espeak" if self.espeak_available else "Console Fallback")
+        if self.pw_play_available:
+            status_backend = "pw-play (PipeWire Native)"
+        elif self.paplay_available:
+            status_backend = "paplay (PulseAudio/PipeWire)"
+        elif self.aplay_available:
+            status_backend = "aplay (ALSA)"
+        elif self.espeak_available:
+            status_backend = "espeak"
+        else:
+            status_backend = "Console Fallback"
+
         dev_info = f" | Device: {self.alsa_device}" if self.alsa_device else ""
         print(f"[SpeechManager] Initialized | Audio Backend: {status_backend}{dev_info} | Assets: {self.assets_dir}")
 
@@ -199,28 +211,30 @@ class SpeechManager:
             self._last_event = event
 
         try:
-            # Strategy 1: Play pre-rendered high-quality JARVIS .wav file via aplay
-            if wav_path.is_file() and self.aplay_available:
-                cmd = ["aplay"]
-                if self.alsa_device:
-                    cmd.extend(["-D", self.alsa_device])
-                cmd.append(str(wav_path))
-                with self._lock:
-                    self._current_process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                        text=True
-                    )
-                _, err = self._current_process.communicate()
-                if self._current_process.returncode != 0 and err:
-                    print(f"[SpeechManager] ⚠️ aplay error: {err.strip()}")
-                    # Fallback retry without -D flag if custom device failed
+            # Strategy 1: Play pre-rendered high-quality JARVIS .wav file
+            if wav_path.is_file():
+                cmd = None
+                if self.pw_play_available:
+                    cmd = ["pw-play", str(wav_path)]
+                elif self.paplay_available:
+                    cmd = ["paplay", str(wav_path)]
+                elif self.aplay_available:
+                    cmd = ["aplay"]
                     if self.alsa_device:
-                        print("[SpeechManager] Retrying with system default audio...")
-                        with self._lock:
-                            self._current_process = subprocess.Popen(["aplay", str(wav_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        self._current_process.wait()
+                        cmd.extend(["-D", self.alsa_device])
+                    cmd.append(str(wav_path))
+
+                if cmd:
+                    with self._lock:
+                        self._current_process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE,
+                            text=True
+                        )
+                    _, err = self._current_process.communicate()
+                    if self._current_process.returncode != 0 and err:
+                        print(f"[SpeechManager] ⚠️ Audio playback error: {err.strip()}")
 
             # Strategy 2: Offline TTS via espeak / espeak-ng with British accent
             elif self.espeak_available and text:
