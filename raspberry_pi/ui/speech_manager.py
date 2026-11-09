@@ -201,7 +201,7 @@ class SpeechManager:
         try:
             # Strategy 1: Play pre-rendered high-quality JARVIS .wav file via aplay
             if wav_path.is_file() and self.aplay_available:
-                cmd = ["aplay", "-q"]
+                cmd = ["aplay"]
                 if self.alsa_device:
                     cmd.extend(["-D", self.alsa_device])
                 cmd.append(str(wav_path))
@@ -209,9 +209,18 @@ class SpeechManager:
                     self._current_process = subprocess.Popen(
                         cmd,
                         stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
+                        stderr=subprocess.PIPE,
+                        text=True
                     )
-                self._current_process.wait()
+                _, err = self._current_process.communicate()
+                if self._current_process.returncode != 0 and err:
+                    print(f"[SpeechManager] ⚠️ aplay error: {err.strip()}")
+                    # Fallback retry without -D flag if custom device failed
+                    if self.alsa_device:
+                        print("[SpeechManager] Retrying with system default audio...")
+                        with self._lock:
+                            self._current_process = subprocess.Popen(["aplay", str(wav_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self._current_process.wait()
 
             # Strategy 2: Offline TTS via espeak / espeak-ng with British accent
             elif self.espeak_available and text:
