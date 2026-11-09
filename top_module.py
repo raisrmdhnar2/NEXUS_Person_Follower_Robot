@@ -585,7 +585,6 @@ class TopModule:
                                 )
 
                             if candidate is not None:
-                                self.speech_manager.stop()
                                 self.greeting_manager.finish_greeting()
                                 self.greeting_manager.mark_interacted(candidate.track_id)
                                 self.target_manager.lock_target(candidate.track_id, candidate)
@@ -597,7 +596,6 @@ class TopModule:
                                 self.last_following_checkin = time.time()
                             elif tracks:
                                 candidate = tracks[0]
-                                self.speech_manager.stop()
                                 self.greeting_manager.finish_greeting()
                                 self.greeting_manager.mark_interacted(candidate.track_id)
                                 self.target_manager.lock_target(candidate.track_id, candidate)
