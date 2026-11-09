@@ -15,6 +15,7 @@ Responsibility:
 """
 
 from enum import Enum
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -116,13 +117,17 @@ class SpeechManager:
         self.espeak_available = shutil.which("espeak") is not None or shutil.which("espeak-ng") is not None
         self.espeak_bin = shutil.which("espeak-ng") or shutil.which("espeak") or "espeak"
 
+        # Allow user to specify custom ALSA audio device via environment variable (e.g. ALSA_DEVICE=plughw:2,0)
+        self.alsa_device = os.environ.get("ALSA_DEVICE", None)
+
         self._current_process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._last_event: Optional[VoiceEvent] = None
         self._is_playing: bool = False
 
         status_backend = "aplay (ALSA)" if self.aplay_available else ("espeak" if self.espeak_available else "Console Fallback")
-        print(f"[SpeechManager] Initialized | Audio Backend: {status_backend} | Assets: {self.assets_dir}")
+        dev_info = f" | Device: {self.alsa_device}" if self.alsa_device else ""
+        print(f"[SpeechManager] Initialized | Audio Backend: {status_backend}{dev_info} | Assets: {self.assets_dir}")
 
     @property
     def is_speaking(self) -> bool:
@@ -196,7 +201,10 @@ class SpeechManager:
         try:
             # Strategy 1: Play pre-rendered high-quality JARVIS .wav file via aplay
             if wav_path.is_file() and self.aplay_available:
-                cmd = ["aplay", "-q", str(wav_path)]
+                cmd = ["aplay", "-q"]
+                if self.alsa_device:
+                    cmd.extend(["-D", self.alsa_device])
+                cmd.append(str(wav_path))
                 with self._lock:
                     self._current_process = subprocess.Popen(
                         cmd,
