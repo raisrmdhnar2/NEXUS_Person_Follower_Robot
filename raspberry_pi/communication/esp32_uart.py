@@ -181,7 +181,7 @@ class Esp32UartBridge:
             packet = "X\n"
         else:
             dx_val = float(dx)
-            packet = f"{dx_val:+.2f}\n"
+            packet = f"{dx_val:.2f}\n"
 
         self.last_send_time = now
         self.last_command = packet.strip()

@@ -21,12 +21,15 @@
 #define INPUT_MAX_VALUE 10000
 #define WS2812PIN 48
 #define NUMPIXELS 1
+#define X_MIN_LIMIT 0.15
+#define Y_MIN_LIMIT 50
 
 struct PIDDefaultdata
 {
     float Kp, Kd, Ki;
     float past_value, now_value, integral_value, setpoin;
     unsigned long past_time;
+    float integral_max_value;
 };
 
 float PIDController(PIDDefaultdata* n);
@@ -42,3 +45,7 @@ void MotorDriver();
 void ConditionalAdderControl();
 
 void fadingLED(uint8_t startvalue, uint8_t endvalue, uint8_t colour);
+
+void MotorRampUp(int lastpwm, int targetpwm, uint8_t motorchannel);
+
+void MotorRampDown(int lastpwm, int targetpwm, uint8_t motorchannel);

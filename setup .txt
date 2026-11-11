@@ -9,6 +9,8 @@ python top_module.py --model models/yolo/yolov8n.pt --imgsz 320 --fullscreen --d
 python top_module.py --model models/yolo/yolov8n_ncnn_model --imgsz 320 --detect-interval 8 --fullscreen
 python top_module.py --fullscreen
 python top_module.py --model models/yolo/nexus_person_detector_int16.tflite --imgsz 320 --fullscreen --detect-interval 5
+QT_QPA_PLATFORM=xcb python top_module.py --model models/yolo/yolov8n_ncnn_model --imgsz 320 --detect-interval 5 --fullscreen
+QT_QPA_PLATFORM=xcb python top_module.py --model models/yolo/yolov8n_ncnn_model --imgsz 320 --detect-interval 8 --display-mode camera_hud --fullscreen
 
 python3 -m serial.tools.miniterm /dev/ttyACM0 115200
 

@@ -15,7 +15,7 @@ FREQUENCY = 25
 INTERVAL = 1.0 / FREQUENCY
 
 # Global Data Send Variable
-RotationData = 400
+RotationData = 100
 
 # Setup buffers for real-time plotting (keep last 250 points = 10 seconds of data)
 BUFFER_SIZE = 250
@@ -26,6 +26,9 @@ dt_buffer = deque(maxlen=BUFFER_SIZE)
 p_buffer = deque(maxlen=BUFFER_SIZE)
 i_buffer = deque(maxlen=BUFFER_SIZE)
 d_buffer = deque(maxlen=BUFFER_SIZE)
+
+lpwm_buffer = deque(maxlen=BUFFER_SIZE)
+rpwm_buffer = deque(maxlen=BUFFER_SIZE)
 
 start_time = time.time()
 
@@ -76,6 +79,12 @@ def main():
   curve_d = plot.plot(
       pen=pg.mkPen(color=(255, 215, 0), width=2), name="Derivative (D)"
   )
+  curve_lpwm = plot.plot(
+      pen=pg.mkPen(color=(255, 0, 0), width=2), name="Left Motor PWM"
+  )
+  curve_rpwm = plot.plot(
+      pen=pg.mkPen(color=(0, 255, 0), width=2), name="Right Motor PWM"
+  )
 
   def update_loop():
     global RotationData, next_send_time
@@ -84,8 +93,7 @@ def main():
 
     # 1. SENDING DATA (25 times per second)
     if current_time >= next_send_time:
-      print(f"Sending -> RotationData: {RotationData}")
-      message = f"{RotationData}\n"
+      message = f"{RotationData:.2f}\n"
       ser.write(message.encode("utf-8"))
       next_send_time += INTERVAL
 
@@ -97,6 +105,27 @@ def main():
           line_str = raw_line.decode("utf-8").strip()
           if line_str:
             tokens = line_str.split(" ")
+
+            if len(tokens) >= 2 and len(tokens) < 4:  # Expecting at least 2 tokens for motor PWM values
+              left_motor_pwm = float(tokens[0])
+              right_motor_pwm = float(tokens[1])
+
+              print(
+                  f"Received -> Left Motor PWM: {left_motor_pwm}, Right Motor"
+                  f" PWM: {right_motor_pwm}"
+              )
+
+              lpwm_buffer.append(left_motor_pwm)
+              rpwm_buffer.append(right_motor_pwm)
+
+              # Update all 4 graph curves
+              t_list = list(time_buffer)
+              curve_dt.setData(t_list, list(dt_buffer))
+              curve_p.setData(t_list, list(p_buffer))
+              curve_i.setData(t_list, list(i_buffer))
+              curve_d.setData(t_list, list(d_buffer))
+              curve_lpwm.setData(t_list, list(lpwm_buffer))
+              curve_rpwm.setData(t_list, list(rpwm_buffer))
 
             # Expecting at least 4 tokens: [dt, P, I, D]
             if len(tokens) >= 4:
@@ -118,24 +147,17 @@ def main():
               i_buffer.append(i_val)
               d_buffer.append(d_val)
 
-              # Update all 4 graph curves
-              t_list = list(time_buffer)
-              curve_dt.setData(t_list, list(dt_buffer))
-              curve_p.setData(t_list, list(p_buffer))
-              curve_i.setData(t_list, list(i_buffer))
-              curve_d.setData(t_list, list(d_buffer))
-
               # Modify mock target data for testing flow
               totalval = p_val + i_val + d_val
               print(f"Total PID Value: {totalval}")
               if totalval > 0:
-                RotationData = RotationData + 1
+                RotationData = RotationData + 0.1
               elif totalval < 0:
-                RotationData = RotationData - 1
+                RotationData = RotationData - 0.1
               
 
         except (UnicodeDecodeError, ValueError) as e:
-          # Catch parse errors if a packet is fragmented or malformed
+          print(f"Error decoding or parsing line: {raw_line}. Error: {e}")
           pass
 
   # Setup high-speed Qt Timer
