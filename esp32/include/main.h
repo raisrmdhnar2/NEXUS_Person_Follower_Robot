@@ -24,6 +24,13 @@
 #define X_MIN_LIMIT 0.15
 #define Y_MIN_LIMIT 50
 
+extern bool state;
+extern float Forward, Rotate;
+extern Adafruit_VL53L1X vl53;
+extern Adafruit_NeoPixel pixels;
+extern struct PIDDefaultdata Forward_PID;
+extern struct PIDDefaultdata Rotation_PID;
+
 struct PIDDefaultdata
 {
     float Kp, Kd, Ki;
@@ -40,12 +47,12 @@ void PIDInitialize();
 
 void ToFSensorRead();
 
-void MotorDriver();
-
-void ConditionalAdderControl();
-
 void fadingLED(uint8_t startvalue, uint8_t endvalue, uint8_t colour);
 
 void MotorRampUp(int lastpwm, int targetpwm, uint8_t motorchannel);
 
 void MotorRampDown(int lastpwm, int targetpwm, uint8_t motorchannel);
+
+void MotorDriver(void *pvParameters);
+
+void SerialRead(char* SerialInput);
