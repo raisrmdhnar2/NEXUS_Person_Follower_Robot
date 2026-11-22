@@ -7,13 +7,18 @@ Contains perception modules:
 - threaded_camera.py: High-speed asynchronous zero-latency camera reader
 """
 
-from .person_detection import PersonDetection, PersonDetector
-from .gesture_recognition import GestureDetection, GestureRecognizer
-from .threaded_camera import ThreadedCamera
+try:
+    from .person_detection import PersonDetection, PersonDetector
+    from .remote_person_detector import RemotePersonDetector
+    from .gesture_recognition import GestureDetection, GestureRecognizer
+    from .threaded_camera import ThreadedCamera
+except ImportError:
+    pass
 
 __all__ = [
     "PersonDetection",
     "PersonDetector",
+    "RemotePersonDetector",
     "GestureDetection",
     "GestureRecognizer",
     "ThreadedCamera",

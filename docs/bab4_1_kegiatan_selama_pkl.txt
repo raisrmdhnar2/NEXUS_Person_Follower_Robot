@@ -1,0 +1,49 @@
+BAB IV
+PEMBAHASAN
+
+4.1. Kegiatan Selama PKL
+Selama melaksanakan Praktik Kerja Lapangan (PKL) di Direktorat Teknologi Informasi (DTI) Universitas Brawijaya, penulis mengikuti rangkaian kegiatan yang berfokus pada perancangan dan implementasi "NEXUS Person Follower Robot". Proyek ini merupakan pengembangan robot beroda pemandu dan pengikut manusia mandiri (Human-Following Robot) berbasis kecerdasan buatan, visi komputer, dan sistem tertanam. Kegiatan ini mencakup pembelajaran mandiri, perancangan sistem visual dan antarmuka, perancangan subsistem kelistrikan dan kendali tertanam, perakitan mekanik bodi robot, hingga pengujian dan evaluasi kinerja secara menyeluruh.
+
+Seluruh kegiatan dilaksanakan secara sistematis sesuai dengan timeline pengembangan proyek yang telah direncanakan bersama pembimbing lapangan dan tim teknis DTI Universitas Brawijaya. Secara umum, pelaksanaan kegiatan selama PKL terbagi ke dalam lima bagian utama sebagai berikut:
+
+1. Pembelajaran dan Analisis Kebutuhan Sistem
+Pada tahap awal PKL, penulis melakukan studi literatur dan pembelajaran mandiri mengenai teknologi dasar yang digunakan dalam pembangunan robot pengikut manusia. Materi yang dipelajari mencakup kinematika mobile robot roda diferensial (differential drive mobile robot), algoritma visi komputer dan deep learning, antarmuka interaksi manusia dan robot (Human-Robot Interaction/HRI), serta komunikasi data serial antar-pengendali.
+
+Selain itu, dilakukan analisis kebutuhan sistem bersama pembimbing lapangan untuk menetapkan spesifikasi fungsional dan operasional robot NEXUS. Kebutuhan fungsional yang ditetapkan meliputi kemampuan robot dalam mengenali keberadaan pengunjung/manusia, mengunci target spesifik melalui gestur autentikasi kata sandi (victory sign/open palm), mengikuti pergerakan target pada jarak aman secara real-time, memberikan umpan balik visual dan audio (JARVIS voice), serta sistem pengereman darurat otomatis berbasis sensor jarak. Dari analisis ini disusun arsitektur dua tingkat pengendali: tingkat tinggi (High-Level Controller) menggunakan Single Board Computer Raspberry Pi untuk pengolahan AI/visi, dan tingkat rendah (Low-Level Controller) menggunakan mikrokontroler dual-core ESP32-S3 untuk kendali motorik real-time.
+
+2. Perancangan Computer Vision dan UI
+Tahap kedua difokuskan pada perancangan dan pengembangan perangkat lunak kecerdasan buatan (Computer Vision) dan antarmuka visual (User Interface / UI) yang dijalankan pada Raspberry Pi. Pada subsistem visi komputer, penulis mengimplementasikan arsitektur pipa pemrosesan visual terpisah (decoupled pipeline):
+a. Person Detection: Menggunakan model deep learning YOLOv8n untuk mendeteksi keberadaan tubuh manusia (bounding box) secara berkala.
+b. Target Tracking & Association: Menggabungkan IoU-based Tracker untuk menjaga persistensi identitas target (Track ID) serta Fast Visual Tracker (OpenCV KCF/CSRT) berkecepatan tinggi (~2–4 ms per frame) agar pelacakan tetap berjalan mulus pada 25–30 FPS tanpa membebani prosesor.
+c. Gesture Recognition & Authentication: Menerapkan algoritma estimasi sendi tangan MediaPipe Hands dan cadangan OpenCV (segmentasi warna kulit dan convexity defects) untuk mendeteksi gestur tangan sebagai kunci aktivasi (NEXUS ON/OFF).
+d. Optimasi Model Edge AI: Melakukan kuantisasi model deep learning ke format TFLite (INT8/INT16) dan ekspor ke framework NCNN terkompresi untuk instruksi akselerasi ARM NEON pada prosesor Raspberry Pi.
+
+Pada perancangan UI, dikembangkan antarmuka ekspresi wajah interaktif (Expressive Face UI) berbasis grafis prosedural OpenCV yang dapat beralih mode tampilan (Face Only, Face Picture-in-Picture, dan Camera HUD). Selain visual, subsistem ini diintegrasikan dengan manajemen audio interaktif berbasis server PipeWire (pw-play) untuk memutar dialog sambutan pengunjung dan konfirmasi status penguncian target.
+
+3. Perancangan Electrical dan Embedded System
+Tahap ketiga berfokus pada perancangan arsitektur kelistrikan, instrumentasi sensor, dan sistem pengendali tertanam berbasis mikrokontroler ESP32-S3. Penulis merancang skema distribusi daya mandiri bertenaga baterai untuk mencatu daya Raspberry Pi, mikrokontroler ESP32-S3, sensor, dan motor driver bertenaga tinggi.
+
+Perancangan perangkat lunak tertanam (firmware) pada ESP32-S3 memanfaatkan sistem operasi waktu nyata (FreeRTOS Dual-Core):
+a. Core 0 (I/O dan Sensor): Didedikasikan untuk komunikasi data serial UART berkecepatan 115200 bps dengan pembatas frekuensi transmisi 25 Hz guna mencegah buffer overflow, serta pembacaan data jarak secara terus-menerus dari sensor laser Time-of-Flight (ToF) VL53L1X melalui jalur I2C (SDA Pin 8, SCL Pin 9).
+b. Core 1 (Kinematika dan Kontrol Motor): Didedikasikan untuk mengeksekusi perhitungan kinematika diferensial, algoritma kendali kecepatan Proportional-Integral-Derivative (PID), kompensasi deadband untuk gir motor DC PG36, serta kendali keselamatan berbasis histeresis (jarak rem <= 50 cm, lepas rem >= 65 cm).
+c. Aktuator dan Penggerak: Pengendalian motor driver H-Bridge BTS7960 ganda untuk mengatur arah putaran dan kecepatan motor PG36 planetary geared 24V secara presisi.
+
+4. Perakitan Body Robot
+Tahap keempat adalah fabrikasi mekanik dan integrasi fisik seluruh komponen ke dalam sasis robot. Desain mekanik robot mengusung konfigurasi differential drive beroda tiga yang terdiri dari dua buah roda penggerak utama di sisi kiri dan kanan serta satu buah roda bebas (caster wheel) di bagian depan/belakang sebagai penyeimbang titik beban.
+
+Proses perakitan meliputi:
+a. Pemasangan braket motor dan perakitan motor PG36 Planetary Gear beserta roda pada sasis dasar (base chassis).
+b. Pembuatan kompartemen elektronik bertingkat untuk menempatkan baterai, modul regulator step-down, driver BTS7960, dan mikrokontroler ESP32-S3 secara terisolasi guna menghindari interferensi elektromagnetik (EMI).
+c. Pemasangan sensor jarak ToF VL53L1X pada posisi sentral bemper bawah untuk pendeteksian rintangan halangan secara akurat.
+d. Perakitan tiang penyangga atas (torso/head) untuk menopang kamera USB sudut pandang depan dan layar display LCD/monitor yang menampilkan UI wajah robot.
+e. Manajemen perkabelan (cable management) untuk memastikan kerapian, keselamatan jalur arus tinggi motor, serta keandalan koneksi USB dan serial selama robot bermanuver.
+
+5. Pengujian Akhir dan Evaluasi
+Tahap akhir difokuskan pada pengujian integrasi menyeluruh dan evaluasi performa sistem robot di lingkungan uji nyata lantai gedung Direktorat Teknologi Informasi Universitas Brawijaya. Pengujian dilakukan melalui serangkaian skenario:
+a. Pengujian Visi dan Autentikasi: Menguji akurasi deteksi manusia oleh model YOLO NCNN pada berbagai jarak (1–4 meter) dan kondisi pencahayaan, serta ketepatan sistem dalam menerima/menolak gestur aktivasi.
+b. Pengujian Pelacakan dan Manuver Belok: Menguji kestabilan pelacak visual KCF saat target manusia bergerak berjalan lurus, berbelok tajam, hingga berhenti mendadak.
+c. Pengujian Komunikasi Serial dan Keandalan Motor: Memastikan nilai koordinat horizontal (dx) tertransmisi tanpa lag/packet loss pada frekuensi 25 Hz, serta respon motorik driver BTS7960 dalam mengimbangi kecepatan target.
+d. Pengujian Sistem Keselamatan Sensor ToF: Memvalidasi fungsi pengereman darurat dan histeresis jarak agar robot dapat berhenti mulus sebelum menyentuh target atau rintangan mendadak.
+e. Evaluasi Kinerja Komputasi: Mengukur konsumsi sumber daya CPU, memori, latensi inferensi (ms), dan stabilitas frame rate (FPS) pada Raspberry Pi.
+
+Selama proses pengujian, penulis mengidentifikasi beberapa kendala teknis lapangan seperti konflik driver audio ALSA (error 524) yang berhasil diatasi melalui migrasi ke PipeWire, penurunan latensi komputasi dari 14.000 ms menjadi di bawah 100 ms dengan format NCNN 320x320, serta eliminasi bug pemotongan suara audio dialog. Hasil evaluasi akhir menunjukkan bahwa sistem NEXUS Person Follower Robot mampu beroperasi secara stabil, responsif, dan aman sebagai robot pemandu interaktif.

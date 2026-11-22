@@ -1,6 +1,6 @@
 nexus/ainexus
 nex_bot
-vncviewer 192.168.1.9
+vncviewer 192.168.0.79
 
 ping raspberrypi.local
 
@@ -14,4 +14,27 @@ QT_QPA_PLATFORM=xcb python top_module.py --model models/yolo/yolov8n_ncnn_model 
 
 python3 -m serial.tools.miniterm /dev/ttyACM0 115200
 
+# Remote GPU Inference Mode (UB AI Hub via VS Code Tunnel)
+python test_remote_connection.py --server https://<TUNNEL-URL>.devtunnels.ms
+QT_QPA_PLATFORM=xcb python top_module_remote.py --server https://<TUNNEL-URL>.devtunnels.ms --display-mode face_only --face-fullscreen
+QT_QPA_PLATFORM=xcb python top_module_remote.py --server https://<TUNNEL-URL>.devtunnels.ms --display-mode camera_hud
+
 -0.15 < x < 0.15
+# Mode dengan tampilan kamera & deteksi orang (Camera HUD):
+QT_QPA_PLATFORM=xcb python top_module_remote.py --server https://tjf578vg-8080.asse.devtunnels.ms/ --display-mode camera_hud
+
+# Atau mode layar Wajah NEXUS:
+QT_QPA_PLATFORM=xcb python top_module_remote.py --server https://tjf578vg-8080.asse.devtunnels.ms/ --display-mode face_only
+
+
+# 1. Masuk ke server lewat VS Code Tunnel, ketik:
+tmux new -s nexus_server
+
+# 2. Jalankan server:
+python server_yolo_gpu.py --port 8080
+
+# 3. Lepaskan sesi agar jalan di background:
+# Tekan tombol Ctrl + B, lalu tekan tombol D (Detach)
+
+# Di terminal server, cukup jalankan:
+cloudflared tunnel --url http://localhost:8080
