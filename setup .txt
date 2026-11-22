@@ -20,6 +20,10 @@ QT_QPA_PLATFORM=xcb python top_module_remote.py --server https://<TUNNEL-URL>.de
 QT_QPA_PLATFORM=xcb python top_module_remote.py --server https://<TUNNEL-URL>.devtunnels.ms --display-mode camera_hud
 
 -0.15 < x < 0.15
+# Versi 2 (Rekomendasi Utama - Bebas Macet 4 Detik):
+QT_QPA_PLATFORM=xcb python top_module_remote_v2.py --server https://tjf578vg-8080.asse.devtunnels.ms/ --display-mode face_only
+QT_QPA_PLATFORM=xcb python top_module_remote_v2.py --server https://tjf578vg-8080.asse.devtunnels.ms/ --display-mode camera_hud
+
 # Mode dengan tampilan kamera & deteksi orang (Camera HUD):
 QT_QPA_PLATFORM=xcb python top_module_remote.py --server https://tjf578vg-8080.asse.devtunnels.ms/ --display-mode camera_hud
 
@@ -38,3 +42,5 @@ python server_yolo_gpu.py --port 8080
 
 # Di terminal server, cukup jalankan:
 cloudflared tunnel --url http://localhost:8080
+
+python test_remote_connection.py --server https://tjf578vg-8080.asse.devtunnels.ms/
