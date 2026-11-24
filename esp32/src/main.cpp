@@ -5,6 +5,9 @@ Adafruit_NeoPixel pixels(NUMPIXELS, WS2812PIN, NEO_GRB + NEO_KHZ800);
 struct PIDDefaultdata Forward_PID ;
 struct PIDDefaultdata Rotation_PID;
 
+SemaphoreHandle_t SerialMutex;
+SemaphoreHandle_t VariableMutex;
+
 bool state = false;
 float Forward = 0, Rotate = 0;
 unsigned long lastSerialRead = 0;
@@ -37,6 +40,9 @@ void setup() {
   // else{
   //   Serial.println("I2C Doesn't connect");
   // }
+
+  SerialMutex = xSemaphoreCreateMutex();
+  VariableMutex = xSemaphoreCreateMutex();
   pinMode(LEFTMOTORPWMPIN, OUTPUT);
   pinMode(RIGHTMOTORPWMPIN, OUTPUT);
   pinMode(RIGHTMOTORRELAYPIN, OUTPUT);
@@ -52,18 +58,24 @@ void setup() {
 
 void loop() {
   char SerialInput[10] = "";
-
-  // ToFSensorRead();
-  Forward = 0;
-
-  if(Serial.available() > 0) {
-    SerialRead(SerialInput);
-    lastSerialRead = millis();
+  if(xSemaphoreTake(VariableMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    
+    // ToFSensorRead();
+    Forward = 0;
+  
+    if(xSemaphoreTake(SerialMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+      if(Serial.available() > 0) {
+        SerialRead(SerialInput);
+        lastSerialRead = millis();
+      }
+      xSemaphoreGive(SerialMutex);
+    }
+  
+      // if(millis() - lastSerialRead > 500) {
+      //   state = false;
+      // }
+    xSemaphoreGive(VariableMutex);
   }
-
-  // if(millis() - lastSerialRead > 500) {
-  //   state = false;
-  // }
 }
 
 void Initializing() {
