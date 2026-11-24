@@ -30,6 +30,8 @@ extern Adafruit_VL53L1X vl53;
 extern Adafruit_NeoPixel pixels;
 extern struct PIDDefaultdata Forward_PID;
 extern struct PIDDefaultdata Rotation_PID;
+extern SemaphoreHandle_t SerialMutex;
+extern SemaphoreHandle_t VariableMutex;
 
 struct PIDDefaultdata
 {
