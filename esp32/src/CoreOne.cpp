@@ -6,7 +6,10 @@ void MotorDriver(void *pvParameters) {
         int LeftMotor = constrain((int)Forward - (int)Rotate, -PWM_MAX_VAL, PWM_MAX_VAL);
         int RightMotor = constrain((int)Forward + (int)Rotate, -PWM_MAX_VAL, PWM_MAX_VAL);
 
-        Serial.printf("Left Motor: %d, Right Motor: %d, Forward: %f, Rotate: %f State: %s \n", LeftMotor, RightMotor, Forward, Rotate, state ? "true" : "false");
+        if(xSemaphoreTake(SerialMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            Serial.printf("Left Motor: %d, Right Motor: %d, Forward: %f, Rotate: %f State: %s \n", LeftMotor, RightMotor, Forward, Rotate, state ? "true" : "false");
+            xSemaphoreGive(SerialMutex);
+        }
 
         if(state) {
             if(LeftMotor > leftmotorlastpwm) {
